@@ -161,6 +161,7 @@
     <ClCompile Include="Rendering\CullingRenderPass.cpp" />
     <ClCompile Include="Rendering\IRenderPass.cpp" />
     <ClCompile Include="Rendering\Mesh.cpp" />
+    <ClCompile Include="Rendering\PostProcessingPass.cpp" />
     <ClCompile Include="Utils\ModelLoader.cpp" />
     <ClCompile Include="VkUtils\ChooseFunc.h" />
     <ClCompile Include="VkUtils\DescriptorBuilder.cpp" />
@@ -190,7 +191,7 @@
     <ClInclude Include="Rendering\CullingRenderPass.h" />
     <ClInclude Include="Rendering\Mesh.h" />
     <ClInclude Include="Rendering\Core.h" />
-    <ClInclude Include="Rendering\PostprocessingPass.h" />
+    <ClInclude Include="Rendering\PostProcessingPass.h" />
     <ClInclude Include="Rendering\RenderSetting.h" />
     <ClInclude Include="Rendering\Swapchain.h" />
     <ClInclude Include="tiny-stable-diffusion-main\TinyStableDiffusion.h" />
