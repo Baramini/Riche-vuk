@@ -28,6 +28,7 @@ class Camera;
 class Editor;
 class CullingRenderPass;
 class BasicLightingPass;
+class PostProcessingPass;
 
 class VulkanRenderer {
  public:
@@ -102,6 +103,7 @@ class VulkanRenderer {
   // - Rendering Pipelines
   std::shared_ptr<CullingRenderPass> m_pCullingRenderPass;
   std::shared_ptr<BasicLightingPass> m_pLightingRenderPass;
+  std::shared_ptr<PostProcessingPass> m_pPostProcessingRenderPass;
 
   entt::registry m_registry;
 
@@ -181,4 +183,16 @@ class VulkanRenderer {
   VkSurfaceFormatKHR ChooseBestSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats);
   VkPresentModeKHR ChooseBestPresentationMode(const std::vector<VkPresentModeKHR> presentationModes);
   VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& surfaceCapabilities);
+
+  // For PostProcessing
+  std::vector<VkImageView> GetSwapchainImageViews() const {
+    std::vector<VkImageView> views;
+    views.reserve(m_swapchainImages.size());
+
+    for (const auto& img : m_swapchainImages) {
+      views.push_back(img.imageView);
+    }
+
+    return views;
+  }
 };

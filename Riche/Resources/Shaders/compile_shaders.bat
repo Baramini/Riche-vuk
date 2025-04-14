@@ -12,6 +12,9 @@ C:/VulkanSDK/1.3.290.0/Bin/glslangValidator.exe -o BoundingBoxPS.spv -V Bounding
 C:/VulkanSDK/1.3.290.0/Bin/glslangValidator.exe -o ViewFrustumCullingCS.spv -V ViewFrustumCullingCS.comp
 C:/VulkanSDK/1.3.290.0/Bin/glslangValidator.exe -o HiZOcclusionCullingCS.spv -V  HiZOcclusionCullingCS.comp
 
+C:/VulkanSDK/1.3.290.0/Bin/glslangValidator.exe -o PostProcessingVS.spv -V PostProcessingVS.vert
+C:/VulkanSDK/1.3.290.0/Bin/glslangValidator.exe -o PostProcessingPS.spv -V PostProcessingPS.frag
+
 C:/VulkanSDK/1.3.290.0/Bin/glslangValidator.exe -o RenderingQuadVS.spv -V RenderingQuadVS.vert
 C:/VulkanSDK/1.3.290.0/Bin/glslangValidator.exe -o RenderingQuadPS.spv -V RenderingQuadPS.frag
 

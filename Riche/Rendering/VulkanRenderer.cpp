@@ -3,6 +3,7 @@
 #include "BasicLightingPass.h"
 #include "Camera.h"
 #include "CullingRenderPass.h"
+#include "PostprocessingPass.h"
 #include "Editor/Editor.h"
 
 namespace {
@@ -109,6 +110,12 @@ void VulkanRenderer::Initialize(GLFWwindow* newWindow, Camera* camera) {
 
     m_pEditor->m_pCullingPass = m_pCullingRenderPass.get();
     m_pEditor->m_pLightingPass = m_pLightingRenderPass.get();
+
+    /// PostProcessing Pipeline
+    m_pPostProcessingRenderPass = std::make_shared<PostProcessingPass>();
+    m_pPostProcessingRenderPass->Init(mainDevice.logicalDevice, mainDevice.physicalDevice, swapChainExtent, GetSwapchainImageViews(),
+                                      m_pLightingRenderPass.get(), m_pCullingRenderPass.get(), MAX_FRAME_DRAWS);
+
 
     /// OffScreen Pipeline
     CreateRenderPass();

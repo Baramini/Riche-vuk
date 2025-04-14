@@ -4,11 +4,19 @@
 #include <string>
 #include <vector>
 #include "Image.h"
+#include "VkUtils/ChooseFunc.h"
+#include "VkUtils/DescriptorManager.h"
+#include "VkUtils/DescriptorBuilder.h"
+#include "VkUtils/ResourceManager.h"
+#include "VkUtils/ShaderModule.h"
+
+class BasicLightingPass;
+class CullingRenderPass;
 
 class PostProcessingPass {
  public:
   void Init(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent, const std::vector<VkImageView>& swapchainImageViews,
-            uint32_t maxFramesInFlight);
+            BasicLightingPass* lightingPass, CullingRenderPass* shadowPass, uint32_t maxFramesInFlight);
   void Cleanup(VkDevice device);
 
   void Update(uint32_t frameIndex);
@@ -32,6 +40,9 @@ class PostProcessingPass {
   VkRenderPass m_renderPass = VK_NULL_HANDLE;
   VkPipeline m_pipeline = VK_NULL_HANDLE;
   VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+
+  BasicLightingPass* m_pLightingPass = nullptr;
+  CullingRenderPass* m_pShadowPass = nullptr;
 
   std::vector<VkFramebuffer> m_framebuffers;
   std::vector<VkDescriptorSet> m_descriptorSets;

@@ -1876,12 +1876,50 @@ void BasicLightingPass::RecordCommands(uint32_t currentImage) {
 
   vkCmdEndRenderPass(m_commandBuffers[currentImage]);
 
+
+
+  // Begin Bloom Pass
+  VkRenderPassBeginInfo bloomRenderPassInfo{};
+  bloomRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  bloomRenderPassInfo.renderPass = m_bloomRenderPass;
+  bloomRenderPassInfo.renderArea.offset = {0, 0};
+  bloomRenderPassInfo.renderArea.extent = {m_width, m_height};
+
+  VkClearValue bloomClearColor{};
+  bloomClearColor.color = {0.0f, 0.0f, 0.0f, 1.0f};
+  bloomRenderPassInfo.clearValueCount = 1;
+  bloomRenderPassInfo.pClearValues = &bloomClearColor;
+
+  bloomRenderPassInfo.framebuffer = m_bloomFramebuffers[currentImage];
+
+  // Begin Render Pass
+  vkCmdBeginRenderPass(m_commandBuffers[currentImage], &bloomRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+  // Record Bloom Extract Commands
+  vkCmdBindPipeline(m_commandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipeline);
+
+  VkDescriptorSet sets[] = {g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"),
+                            g_DescriptorManager.GetVkDescriptorSet("OffScreenInput" + std::to_string(currentImage))};
+
+  vkCmdBindDescriptorSets(m_commandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipelineLayout, 0, 2, sets, 0,
+                          nullptr);
+
+  vkCmdDraw(m_commandBuffers[currentImage], 3, 1, 0, 0);
+
+  // End Render Pass
+  vkCmdEndRenderPass(m_commandBuffers[currentImage]);
+
+
+
   VkUtils::CmdImageBarrier(m_commandBuffers[currentImage], m_colourBufferImages[currentImage].image,
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_IMAGE_ASPECT_COLOR_BIT);
   VkUtils::CmdImageBarrier(m_commandBuffers[currentImage], m_depthStencilBufferImages[currentImage].image,
                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+  VkUtils::CmdImageBarrier(m_commandBuffers[currentImage], m_bloomExtractImages[currentImage].image,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_IMAGE_ASPECT_COLOR_BIT);
 
   // Stop recording commands to command buffer!
   VK_CHECK(vkEndCommandBuffer(m_commandBuffers[currentImage]));
@@ -2017,4 +2055,226 @@ void BasicLightingPass::RecordObjectIDPassCommands(uint32_t currentImage) {
     );
     g_ShaderSetting.batchIdx += miniBatch.m_drawIndexedCommands.size();
   }
+}
+
+void BasicLightingPass::CreateBloomRenderPass() {
+  VkAttachmentDescription colorAttachment{};
+  colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;  // HDR 추출용 포맷
+  colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+  VkAttachmentReference colorRef{};
+  colorRef.attachment = 0;
+  colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+  VkSubpassDescription subpass{};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &colorRef;
+
+  VkSubpassDependency dependency{};
+  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependency.dstSubpass = 0;
+  dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+  VkRenderPassCreateInfo renderPassInfo{};
+  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  renderPassInfo.attachmentCount = 1;
+  renderPassInfo.pAttachments = &colorAttachment;
+  renderPassInfo.subpassCount = 1;
+  renderPassInfo.pSubpasses = &subpass;
+  renderPassInfo.dependencyCount = 1;
+  renderPassInfo.pDependencies = &dependency;
+
+  VK_CHECK(vkCreateRenderPass(m_pDevice, &renderPassInfo, nullptr, &m_bloomRenderPass));
+}
+
+void BasicLightingPass::CreateBloomFramebuffer() {
+  m_bloomExtractImages.resize(MAX_FRAME_DRAWS);
+  m_bloomFramebuffers.resize(MAX_FRAME_DRAWS);
+
+  for (uint32_t i = 0; i < MAX_FRAME_DRAWS; ++i) {
+    // 1. Image + Memory 생성
+    VK_CHECK(VkUtils::CreateImage2D(m_pDevice, m_pPhyscialDevice, m_width, m_height, &m_bloomExtractImages[i].memory,
+                                    &m_bloomExtractImages[i].image, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+
+    // 2. ImageView 생성
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_bloomExtractImages[i].image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VK_CHECK(vkCreateImageView(m_pDevice, &viewInfo, nullptr, &m_bloomExtractImages[i].imageView));
+
+    // 3. Framebuffer 생성
+    VkImageView attachments[] = {m_bloomExtractImages[i].imageView};
+
+    VkFramebufferCreateInfo framebufferInfo{};
+    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebufferInfo.renderPass = m_bloomRenderPass;
+    framebufferInfo.attachmentCount = 1;
+    framebufferInfo.pAttachments = attachments;
+    framebufferInfo.width = m_width;
+    framebufferInfo.height = m_height;
+    framebufferInfo.layers = 1;
+
+    VK_CHECK(vkCreateFramebuffer(m_pDevice, &framebufferInfo, nullptr, &m_bloomFramebuffers[i]));
+  }
+}
+
+void BasicLightingPass::CreateBloomExtractPipeline() {
+  auto vertShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingVS.spv");
+  auto fragShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingPS.spv");
+
+  VkShaderModule vertShaderModule = VkUtils::CreateShaderModule(m_pDevice, vertShaderCode);
+  VkShaderModule fragShaderModule = VkUtils::CreateShaderModule(m_pDevice, fragShaderCode);
+
+  VkPipelineShaderStageCreateInfo shaderStages[2] = {};
+
+  shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+  shaderStages[0].module = vertShaderModule;
+  shaderStages[0].pName = "main";
+
+  shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+  shaderStages[1].module = fragShaderModule;
+  shaderStages[1].pName = "main";
+
+  VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
+  vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+  VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
+  inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+  VkViewport viewport{};
+  viewport.x = 0.0f;
+  viewport.y = 0.0f;
+  viewport.width = static_cast<float>(m_width);
+  viewport.height = static_cast<float>(m_height);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+
+  VkRect2D scissor{};
+  scissor.offset = {0, 0};
+  scissor.extent = {m_width, m_height};
+
+  VkPipelineViewportStateCreateInfo viewportState{};
+  viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  viewportState.viewportCount = 1;
+  viewportState.pViewports = &viewport;
+  viewportState.scissorCount = 1;
+  viewportState.pScissors = &scissor;
+
+  VkPipelineRasterizationStateCreateInfo rasterizer{};
+  rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+  rasterizer.cullMode = VK_CULL_MODE_NONE;
+  rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  rasterizer.lineWidth = 1.0f;
+
+  VkPipelineMultisampleStateCreateInfo multisampling{};
+  multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+  VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+  colorBlendAttachment.colorWriteMask =
+      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  colorBlendAttachment.blendEnable = VK_FALSE;
+
+  VkPipelineColorBlendStateCreateInfo colorBlending{};
+  colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  colorBlending.attachmentCount = 1;
+  colorBlending.pAttachments = &colorBlendAttachment;
+
+  // Descriptor Layout
+  std::vector<VkDescriptorSetLayout> setLayouts = {
+      g_DescriptorManager.GetVkDescriptorSetLayout("SamplerList_ALL"),
+      g_DescriptorManager.GetVkDescriptorSetLayout("OffScreenInput0")  // 조명 텍스처
+  };
+
+  VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+  pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+  pipelineLayoutInfo.pSetLayouts = setLayouts.data();
+
+  VK_CHECK(vkCreatePipelineLayout(m_pDevice, &pipelineLayoutInfo, nullptr, &m_bloomExtractPipelineLayout));
+
+  VkGraphicsPipelineCreateInfo pipelineInfo{};
+  pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  pipelineInfo.stageCount = 2;
+  pipelineInfo.pStages = shaderStages;
+  pipelineInfo.pVertexInputState = &vertexInputInfo;
+  pipelineInfo.pInputAssemblyState = &inputAssembly;
+  pipelineInfo.pViewportState = &viewportState;
+  pipelineInfo.pRasterizationState = &rasterizer;
+  pipelineInfo.pMultisampleState = &multisampling;
+  pipelineInfo.pColorBlendState = &colorBlending;
+  pipelineInfo.layout = m_bloomExtractPipelineLayout;
+  pipelineInfo.renderPass = m_bloomRenderPass;
+  pipelineInfo.subpass = 0;
+
+  VK_CHECK(vkCreateGraphicsPipelines(m_pDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_bloomExtractPipeline));
+
+  vkDestroyShaderModule(m_pDevice, vertShaderModule, nullptr);
+  vkDestroyShaderModule(m_pDevice, fragShaderModule, nullptr);
+}
+
+void BasicLightingPass::RecordBloomExtractCommands(uint32_t imageIndex) {
+  VkCommandBuffer cmd = m_commandBuffers[imageIndex];
+
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+  VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
+
+  VkClearValue clearColor{};
+  clearColor.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+
+  VkRenderPassBeginInfo renderPassInfo{};
+  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  renderPassInfo.renderPass = m_bloomRenderPass;
+  renderPassInfo.framebuffer = m_bloomFramebuffers[imageIndex];
+  renderPassInfo.renderArea.offset = {0, 0};
+  renderPassInfo.renderArea.extent = {m_width, m_height};
+  renderPassInfo.clearValueCount = 1;
+  renderPassInfo.pClearValues = &clearColor;
+
+  vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+  // Bind pipeline
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipeline);
+
+  // Bind descriptor sets (조명 텍스처)
+  VkDescriptorSet sets[] = {g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"),
+                            g_DescriptorManager.GetVkDescriptorSet("OffScreenInput" + std::to_string(imageIndex))};
+
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipelineLayout, 0, 2, sets, 0, nullptr);
+
+  // Fullscreen triangle
+  vkCmdDraw(cmd, 3, 1, 0, 0);
+
+  vkCmdEndRenderPass(cmd);
+
+  VK_CHECK(vkEndCommandBuffer(cmd));
 }
