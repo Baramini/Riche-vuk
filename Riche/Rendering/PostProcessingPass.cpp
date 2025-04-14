@@ -4,12 +4,13 @@
 
 void PostProcessingPass::Init(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent,
                               const std::vector<VkImageView>& swapchainImageViews, BasicLightingPass* lightingPass,
-                              CullingRenderPass* shadowPass, uint32_t maxFramesInFlight) {
+                              CullingRenderPass* shadowPass, VkFormat swapchainFormat, uint32_t maxFramesInFlight) {
   m_device = device;
   m_physicalDevice = physicalDevice;
   m_extent = extent;
   m_maxFrames = maxFramesInFlight;
   m_swapchainImageViews = swapchainImageViews;
+  m_pSwapchainFormat = swapchainFormat;
 
   m_pLightingPass = lightingPass;
   m_pShadowPass = shadowPass;
@@ -30,7 +31,7 @@ void PostProcessingPass::Cleanup(VkDevice device) {
 
 void PostProcessingPass::CreateRenderPass() {
   VkAttachmentDescription colorAttachment = {};
-  colorAttachment.format = VK_FORMAT_B8G8R8A8_UNORM;  // 또는 외부에서 받아온 swapchain format 사용 가능
+  colorAttachment.format = m_pSwapchainFormat;  // 또는 외부에서 받아온 swapchain format 사용 가능
   colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
   colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
   colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -103,6 +104,12 @@ void PostProcessingPass::CreateDescriptorSets() {
   m_descriptorSets.resize(m_maxFrames);
 
   for (uint32_t i = 0; i < m_maxFrames; ++i) {
+    std::cout << "[DEBUG] FrameIndex: " << i << "\n";
+    std::cout << "  m_maxFrames: " << m_maxFrames << "\n";
+    std::cout << "  m_colourBufferImages.size(): " << m_pLightingPass->GetColorBufferImageSize() << "\n";
+    std::cout << "  m_bloomExtractImages.size(): " << m_pLightingPass->GetBloomImageSize() << "\n";
+    std::cout << "  m_descriptorSets.size(): " << m_descriptorSets.size() << "\n";
+
     // Lighting 텍스처
     VkDescriptorImageInfo inputColour = {};
     inputColour.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

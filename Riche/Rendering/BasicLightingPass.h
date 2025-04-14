@@ -38,6 +38,9 @@ class BasicLightingPass : public IRenderPass {
   VkImageView& GetOutputImageView(uint32_t frameIndex) { return m_colourBufferImages[frameIndex].imageView; };
   VkImageView& GetBloomImageView(uint32_t frameIndex) { return m_bloomExtractImages[frameIndex].imageView; };
 
+  size_t GetColorBufferImageSize() const { return m_colourBufferImages.size(); }
+  size_t GetBloomImageSize() const { return m_bloomExtractImages.size(); }
+
  private:
   virtual void CreateRenderPass();
   void CreateLightingRenderPass();

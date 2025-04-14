@@ -114,7 +114,7 @@ void VulkanRenderer::Initialize(GLFWwindow* newWindow, Camera* camera) {
     /// PostProcessing Pipeline
     m_pPostProcessingRenderPass = std::make_shared<PostProcessingPass>();
     m_pPostProcessingRenderPass->Init(mainDevice.logicalDevice, mainDevice.physicalDevice, swapChainExtent, GetSwapchainImageViews(),
-                                      m_pLightingRenderPass.get(), m_pCullingRenderPass.get(), MAX_FRAME_DRAWS);
+                                      m_pLightingRenderPass.get(), m_pCullingRenderPass.get(), swapChainImageFormat, MAX_FRAME_DRAWS);
 
 
     /// OffScreen Pipeline
@@ -1257,7 +1257,7 @@ VkSurfaceFormatKHR VulkanRenderer::ChooseBestSurfaceFormat(const std::vector<VkS
 
   // If restriceted, search for optimal format
   for (const auto& format : formats) {
-    if ((format.format == VK_FORMAT_R8G8B8A8_UNORM /* || format.format == VK_FORMAT_B8G8R8A8_UNORM*/) &&
+    if ((format.format == VK_FORMAT_R16G16B16A16_SFLOAT /* || format.format == VK_FORMAT_B8G8R8A8_UNORM*/) &&
         format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
       return format;
     }

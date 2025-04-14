@@ -23,7 +23,9 @@ void BasicLightingPass::Initialize(VkDevice device, VkPhysicalDevice physicalDev
    * Create Resoureces
    */
   CreateRenderPass();
+  CreateBloomRenderPass();
   CreateFramebuffers();
+  CreateBloomFramebuffer();
   CreateBuffers();
 
   CreatePushConstantRange();
@@ -317,7 +319,7 @@ void BasicLightingPass::CreateLightingRenderPass() {
   // SUBPASS 1 ATTACHMENTS (INPUT ATTACHMEMNTS)
   // Colour Attachment
   VkAttachmentDescription colourAttachment = {};
-  colourAttachment.format = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R8G8B8A8_UNORM}, VK_IMAGE_TILING_OPTIMAL,
+  colourAttachment.format = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R16G16B16A16_SFLOAT}, VK_IMAGE_TILING_OPTIMAL,
                                                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
   colourAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
   colourAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -486,7 +488,8 @@ void BasicLightingPass::CreateLightingFramebuffer() {
   m_depthStencilBufferImages.resize(MAX_FRAME_DRAWS);
   m_framebuffers.resize(MAX_FRAME_DRAWS);
 
-  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R8G8B8A8_UNORM}, VK_IMAGE_TILING_OPTIMAL,
+  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R16G16B16A16_SFLOAT},
+                                                              VK_IMAGE_TILING_OPTIMAL,
                                                               VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
   VkFormat depthImageFormat = VkUtils::ChooseSupportedFormat(
       m_pPhyscialDevice, {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT}, VK_IMAGE_TILING_OPTIMAL,
@@ -559,7 +562,8 @@ void BasicLightingPass::CreateObjectIdFramebuffer() {
 
 void BasicLightingPass::CreateRaytracingFramebuffer() {
   m_raytracingImages.resize(MAX_FRAME_DRAWS);
-  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R8G8B8A8_UNORM}, VK_IMAGE_TILING_OPTIMAL,
+  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R16G16B16A16_SFLOAT},
+                                                              VK_IMAGE_TILING_OPTIMAL,
                                                               VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
 
   VkCommandBuffer commandBuffer = g_ResourceManager.CreateAndBeginCommandBuffer();
@@ -644,6 +648,7 @@ void BasicLightingPass::CreatePipelines() {
   CreateBoundingBoxPipeline();
   CreateObjectIDPipeline();
   CreateRaytracingPipeline();
+  CreateBloomExtractPipeline();
 }
 
 void BasicLightingPass::CreateGraphicsPipeline() {
@@ -1876,8 +1881,6 @@ void BasicLightingPass::RecordCommands(uint32_t currentImage) {
 
   vkCmdEndRenderPass(m_commandBuffers[currentImage]);
 
-
-
   // Begin Bloom Pass
   VkRenderPassBeginInfo bloomRenderPassInfo{};
   bloomRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1889,7 +1892,6 @@ void BasicLightingPass::RecordCommands(uint32_t currentImage) {
   bloomClearColor.color = {0.0f, 0.0f, 0.0f, 1.0f};
   bloomRenderPassInfo.clearValueCount = 1;
   bloomRenderPassInfo.pClearValues = &bloomClearColor;
-
   bloomRenderPassInfo.framebuffer = m_bloomFramebuffers[currentImage];
 
   // Begin Render Pass
@@ -2137,10 +2139,47 @@ void BasicLightingPass::CreateBloomFramebuffer() {
     framebufferInfo.layers = 1;
 
     VK_CHECK(vkCreateFramebuffer(m_pDevice, &framebufferInfo, nullptr, &m_bloomFramebuffers[i]));
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = m_bloomExtractImages[i].imageView;
+    imageInfo.sampler = VK_NULL_HANDLE;  // 후처리 단계라면 Sampler는 필요 없을 수 있음
+
+    auto builder = VkUtils::DescriptorBuilder::Begin(&g_DescriptorLayoutCache, &g_DescriptorAllocator);
+    builder.BindImage(0, &imageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    std::string name = "OffScreenInput" + std::to_string(i);
+    g_DescriptorManager.AddDescriptorSet(&builder, name);
   }
 }
 
 void BasicLightingPass::CreateBloomExtractPipeline() {
+  // 1. OffScreenInput0 DescriptorSetLayout 없으면 생성해서 등록
+  /*
+  if (!g_DescriptorManager.HasDescriptorSetLayout("OffScreenInput0")) {
+    std::vector<VkDescriptorSetLayoutBinding> bindings(3);
+
+    bindings[0] = VkUtils::DescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+    bindings[1] = VkUtils::DescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+    bindings[2] = VkUtils::DescriptorSetLayoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+
+    VkDescriptorSetLayout layout;
+    VK_CHECK(vkCreateDescriptorSetLayout(m_pDevice, &layoutInfo, nullptr, &layout));
+
+    // DescriptorManager 등록
+    VkUtils::DescriptorHandle handle = g_DescriptorManager.setLayoutHandle++;
+    g_DescriptorManager.setLayoutMap[handle] = layout;
+    g_DescriptorManager.loadedSetLayout["OffScreenInput0"] = handle;
+
+    std::cout << "[INFO] OffScreenInput0 DescriptorSetLayout created and registered.\n";
+  }*/
+
+  // 2. 셰이더 로드
   auto vertShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingVS.spv");
   auto fragShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingPS.spv");
 
@@ -2148,7 +2187,6 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
   VkShaderModule fragShaderModule = VkUtils::CreateShaderModule(m_pDevice, fragShaderCode);
 
   VkPipelineShaderStageCreateInfo shaderStages[2] = {};
-
   shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
   shaderStages[0].module = vertShaderModule;
@@ -2159,6 +2197,7 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
   shaderStages[1].module = fragShaderModule;
   shaderStages[1].pName = "main";
 
+  // 3. 파이프라인 고정 상태 설정
   VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
   vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -2206,11 +2245,9 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
   colorBlending.attachmentCount = 1;
   colorBlending.pAttachments = &colorBlendAttachment;
 
-  // Descriptor Layout
-  std::vector<VkDescriptorSetLayout> setLayouts = {
-      g_DescriptorManager.GetVkDescriptorSetLayout("SamplerList_ALL"),
-      g_DescriptorManager.GetVkDescriptorSetLayout("OffScreenInput0")  // 조명 텍스처
-  };
+  // 4. Descriptor Set Layout 연결
+  std::vector<VkDescriptorSetLayout> setLayouts = {g_DescriptorManager.GetVkDescriptorSetLayout("SamplerList_ALL"),
+                                                   g_DescriptorManager.GetVkDescriptorSetLayout("OffScreenInput0")};
 
   VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
   pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -2219,6 +2256,7 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
 
   VK_CHECK(vkCreatePipelineLayout(m_pDevice, &pipelineLayoutInfo, nullptr, &m_bloomExtractPipelineLayout));
 
+  // 파이프라인 생성
   VkGraphicsPipelineCreateInfo pipelineInfo{};
   pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
   pipelineInfo.stageCount = 2;
@@ -2235,9 +2273,11 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
 
   VK_CHECK(vkCreateGraphicsPipelines(m_pDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_bloomExtractPipeline));
 
+  // Shader Module 정리
   vkDestroyShaderModule(m_pDevice, vertShaderModule, nullptr);
   vkDestroyShaderModule(m_pDevice, fragShaderModule, nullptr);
 }
+
 
 void BasicLightingPass::RecordBloomExtractCommands(uint32_t imageIndex) {
   VkCommandBuffer cmd = m_commandBuffers[imageIndex];

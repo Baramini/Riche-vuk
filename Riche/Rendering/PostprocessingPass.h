@@ -16,7 +16,7 @@ class CullingRenderPass;
 class PostProcessingPass {
  public:
   void Init(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent, const std::vector<VkImageView>& swapchainImageViews,
-            BasicLightingPass* lightingPass, CullingRenderPass* shadowPass, uint32_t maxFramesInFlight);
+            BasicLightingPass* lightingPass, CullingRenderPass* shadowPass, VkFormat swapchainFormat, uint32_t maxFramesInFlight);
   void Cleanup(VkDevice device);
 
   void Update(uint32_t frameIndex);
@@ -40,6 +40,7 @@ class PostProcessingPass {
   VkRenderPass m_renderPass = VK_NULL_HANDLE;
   VkPipeline m_pipeline = VK_NULL_HANDLE;
   VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+  VkFormat m_pSwapchainFormat = VK_FORMAT_UNDEFINED;
 
   BasicLightingPass* m_pLightingPass = nullptr;
   CullingRenderPass* m_pShadowPass = nullptr;
