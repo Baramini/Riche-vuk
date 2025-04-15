@@ -116,7 +116,6 @@ void VulkanRenderer::Initialize(GLFWwindow* newWindow, Camera* camera) {
     m_pPostProcessingRenderPass->Init(mainDevice.logicalDevice, mainDevice.physicalDevice, swapChainExtent, GetSwapchainImageViews(),
                                       m_pLightingRenderPass.get(), m_pCullingRenderPass.get(), swapChainImageFormat, MAX_FRAME_DRAWS);
 
-
     /// OffScreen Pipeline
     CreateRenderPass();
     CreateSwapchainFrameBuffers();
@@ -245,6 +244,7 @@ void VulkanRenderer::Cleanup() {
   m_pEditor->Cleanup();
   m_pCullingRenderPass->Cleanup();
   m_pLightingRenderPass->Cleanup();
+  m_pPostProcessingRenderPass->Cleanup();
 
   for (auto& batch : g_BatchManager.m_miniBatchList) {
     batch.Cleanup(mainDevice.logicalDevice);
@@ -983,7 +983,15 @@ void VulkanRenderer::CreateSynchronisation() {
   }
 }
 
-void VulkanRenderer::RecordCommands(uint32_t currentImage) { FillOffScreenCommands(currentImage); }
+void VulkanRenderer::RecordCommands(uint32_t currentImage) {
+  VkCommandBuffer cmd = m_swapchainCommandBuffers[currentImage];
+  VkCommandBufferBeginInfo bufferBeginInfo{};
+  bufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  bufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+  VK_CHECK(vkBeginCommandBuffer(cmd, &bufferBeginInfo));
+  m_pPostProcessingRenderPass->RecordCommands(cmd, currentImage);
+  FillOffScreenCommands(currentImage);
+}
 
 void VulkanRenderer::FillOffScreenCommands(uint32_t currentImage) {
   // information about how to begin each command buffer

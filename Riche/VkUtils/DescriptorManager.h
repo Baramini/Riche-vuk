@@ -37,6 +37,13 @@ class DescriptorManager : public Singleton<DescriptorManager> {
   VkDescriptorSetLayout& GetVkDescriptorSetLayout(DescriptorHandle handle);
   VkDescriptorSetLayout& GetVkDescriptorSetLayout(std::string const& name);
   bool HasDescriptorSetLayout(const std::string& name) const { return loadedSetLayout.find(name) != loadedSetLayout.end(); }
+  void AddDescriptorSetLayout(std::string const& name, VkDescriptorSet set, VkDescriptorSetLayout layout);
+
+  void RegisterSetLayout(const std::string& name, VkDescriptorSetLayout layout);
+  void RegisterLayout(const std::string& name, VkDescriptorSetLayout layout);
+  void RegisterSet(const std::string& name, VkDescriptorSet set);
+  void UnregisterLayout(const std::string& name);
+  void UnregisterSet(const std::string& name);
 };
 
 static VkWriteDescriptorSet& WriteDescriptorSet(VkDescriptorSet set, VkDescriptorType type, uint32_t binding,

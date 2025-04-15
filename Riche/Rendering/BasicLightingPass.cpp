@@ -22,6 +22,7 @@ void BasicLightingPass::Initialize(VkDevice device, VkPhysicalDevice physicalDev
   /*
    * Create Resoureces
    */
+  CreateDescriptorSetLayout();
   CreateRenderPass();
   CreateBloomRenderPass();
   CreateFramebuffers();
@@ -115,6 +116,29 @@ void BasicLightingPass::Cleanup() {
     vkDestroyDescriptorSetLayout(m_pDevice, m_raytracingSetLayouts[i], nullptr);
   }
   vkDestroyDescriptorPool(m_pDevice, m_raytracingPool, nullptr);
+
+  /*
+  // For Bloom
+  g_DescriptorManager.UnregisterLayout("PostProcessInput");
+
+  for (int i = 0; i < MAX_FRAME_DRAWS; ++i) {
+    if (m_bloomFramebuffers[i] != VK_NULL_HANDLE) vkDestroyFramebuffer(m_pDevice, m_bloomFramebuffers[i], nullptr);
+
+    if (m_bloomExtractImages[i].imageView != VK_NULL_HANDLE) vkDestroyImageView(m_pDevice, m_bloomExtractImages[i].imageView, nullptr);
+
+    if (m_bloomExtractImages[i].image != VK_NULL_HANDLE) vkDestroyImage(m_pDevice, m_bloomExtractImages[i].image, nullptr);
+
+    if (m_bloomExtractImages[i].memory != VK_NULL_HANDLE) vkFreeMemory(m_pDevice, m_bloomExtractImages[i].memory, nullptr);
+
+    g_DescriptorManager.UnregisterSet("PostProcessInput" + std::to_string(i));
+  }
+
+  if (m_bloomRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_pDevice, m_bloomRenderPass, nullptr);
+
+  if (m_bloomExtractPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_pDevice, m_bloomExtractPipeline, nullptr);
+
+  if (m_bloomExtractPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_pDevice, m_bloomExtractPipelineLayout, nullptr);
+  */
 }
 
 void BasicLightingPass::Update(uint32_t imageIndex) {
@@ -1901,7 +1925,7 @@ void BasicLightingPass::RecordCommands(uint32_t currentImage) {
   vkCmdBindPipeline(m_commandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipeline);
 
   VkDescriptorSet sets[] = {g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"),
-                            g_DescriptorManager.GetVkDescriptorSet("OffScreenInput" + std::to_string(currentImage))};
+                            g_DescriptorManager.GetVkDescriptorSet("PostProcessInput" + std::to_string(currentImage))};
 
   vkCmdBindDescriptorSets(m_commandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipelineLayout, 0, 2, sets, 0,
                           nullptr);
@@ -2059,6 +2083,24 @@ void BasicLightingPass::RecordObjectIDPassCommands(uint32_t currentImage) {
   }
 }
 
+void BasicLightingPass::CreateDescriptorSetLayout() {
+  VkDescriptorSetLayoutBinding bindings[3]{};
+
+  bindings[0] = VkUtils::DescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+  bindings[1] = VkUtils::DescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+  bindings[2] = VkUtils::DescriptorSetLayoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+  VkDescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 3;
+  layoutInfo.pBindings = bindings;
+
+  VkDescriptorSetLayout layout;
+  VK_CHECK(vkCreateDescriptorSetLayout(m_pDevice, &layoutInfo, nullptr, &layout));
+
+  g_DescriptorManager.RegisterSetLayout("PostProcessInput", layout);
+}
+
 void BasicLightingPass::CreateBloomRenderPass() {
   VkAttachmentDescription colorAttachment{};
   colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;  // HDR 추출용 포맷
@@ -2114,10 +2156,8 @@ void BasicLightingPass::CreateBloomFramebuffer() {
     viewInfo.image = m_bloomExtractImages[i].image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-    viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-    viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-    viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    viewInfo.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                           VK_COMPONENT_SWIZZLE_IDENTITY};
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
@@ -2128,7 +2168,6 @@ void BasicLightingPass::CreateBloomFramebuffer() {
 
     // 3. Framebuffer 생성
     VkImageView attachments[] = {m_bloomExtractImages[i].imageView};
-
     VkFramebufferCreateInfo framebufferInfo{};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = m_bloomRenderPass;
@@ -2140,46 +2179,36 @@ void BasicLightingPass::CreateBloomFramebuffer() {
 
     VK_CHECK(vkCreateFramebuffer(m_pDevice, &framebufferInfo, nullptr, &m_bloomFramebuffers[i]));
 
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageInfo.imageView = m_bloomExtractImages[i].imageView;
-    imageInfo.sampler = VK_NULL_HANDLE;  // 후처리 단계라면 Sampler는 필요 없을 수 있음
+    // 4. DescriptorSet 생성만 (공통 Layout 사용)
+    VkDescriptorImageInfo inputColour{};
+    inputColour.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    inputColour.imageView = m_colourBufferImages[i].imageView;
+    inputColour.sampler = VK_NULL_HANDLE;
+
+    VkDescriptorImageInfo shadow{};
+    shadow.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    shadow.imageView = m_depthStencilBufferImages[i].imageView;
+    shadow.sampler = VK_NULL_HANDLE;
+
+    VkDescriptorImageInfo bloom{};
+    bloom.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    bloom.imageView = m_bloomExtractImages[i].imageView;
+    bloom.sampler = VK_NULL_HANDLE;
 
     auto builder = VkUtils::DescriptorBuilder::Begin(&g_DescriptorLayoutCache, &g_DescriptorAllocator);
-    builder.BindImage(0, &imageInfo, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.BindImage(0, &inputColour, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.BindImage(1, &shadow, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.BindImage(2, &bloom, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
 
-    std::string name = "OffScreenInput" + std::to_string(i);
-    g_DescriptorManager.AddDescriptorSet(&builder, name);
+    VkDescriptorSet descriptorSet;
+    builder.Build(descriptorSet, g_DescriptorManager.GetVkDescriptorSetLayout("PostProcessInput"));
+
+    std::string name = "PostProcessInput" + std::to_string(i);
+    g_DescriptorManager.RegisterSet(name, descriptorSet);
   }
 }
 
 void BasicLightingPass::CreateBloomExtractPipeline() {
-  // 1. OffScreenInput0 DescriptorSetLayout 없으면 생성해서 등록
-  /*
-  if (!g_DescriptorManager.HasDescriptorSetLayout("OffScreenInput0")) {
-    std::vector<VkDescriptorSetLayoutBinding> bindings(3);
-
-    bindings[0] = VkUtils::DescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
-    bindings[1] = VkUtils::DescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
-    bindings[2] = VkUtils::DescriptorSetLayoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
-
-    VkDescriptorSetLayout layout;
-    VK_CHECK(vkCreateDescriptorSetLayout(m_pDevice, &layoutInfo, nullptr, &layout));
-
-    // DescriptorManager 등록
-    VkUtils::DescriptorHandle handle = g_DescriptorManager.setLayoutHandle++;
-    g_DescriptorManager.setLayoutMap[handle] = layout;
-    g_DescriptorManager.loadedSetLayout["OffScreenInput0"] = handle;
-
-    std::cout << "[INFO] OffScreenInput0 DescriptorSetLayout created and registered.\n";
-  }*/
-
-  // 2. 셰이더 로드
   auto vertShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingVS.spv");
   auto fragShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingPS.spv");
 
@@ -2187,6 +2216,7 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
   VkShaderModule fragShaderModule = VkUtils::CreateShaderModule(m_pDevice, fragShaderCode);
 
   VkPipelineShaderStageCreateInfo shaderStages[2] = {};
+
   shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
   shaderStages[0].module = vertShaderModule;
@@ -2197,7 +2227,6 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
   shaderStages[1].module = fragShaderModule;
   shaderStages[1].pName = "main";
 
-  // 3. 파이프라인 고정 상태 설정
   VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
   vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -2245,9 +2274,10 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
   colorBlending.attachmentCount = 1;
   colorBlending.pAttachments = &colorBlendAttachment;
 
-  // 4. Descriptor Set Layout 연결
-  std::vector<VkDescriptorSetLayout> setLayouts = {g_DescriptorManager.GetVkDescriptorSetLayout("SamplerList_ALL"),
-                                                   g_DescriptorManager.GetVkDescriptorSetLayout("OffScreenInput0")};
+  std::vector<VkDescriptorSetLayout> setLayouts = {
+      g_DescriptorManager.GetVkDescriptorSetLayout("SamplerList_ALL"),
+      g_DescriptorManager.GetVkDescriptorSetLayout("PostProcessInput")  // 공유 Layout 이름
+  };
 
   VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
   pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -2256,7 +2286,6 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
 
   VK_CHECK(vkCreatePipelineLayout(m_pDevice, &pipelineLayoutInfo, nullptr, &m_bloomExtractPipelineLayout));
 
-  // 파이프라인 생성
   VkGraphicsPipelineCreateInfo pipelineInfo{};
   pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
   pipelineInfo.stageCount = 2;
@@ -2273,11 +2302,9 @@ void BasicLightingPass::CreateBloomExtractPipeline() {
 
   VK_CHECK(vkCreateGraphicsPipelines(m_pDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_bloomExtractPipeline));
 
-  // Shader Module 정리
   vkDestroyShaderModule(m_pDevice, vertShaderModule, nullptr);
   vkDestroyShaderModule(m_pDevice, fragShaderModule, nullptr);
 }
-
 
 void BasicLightingPass::RecordBloomExtractCommands(uint32_t imageIndex) {
   VkCommandBuffer cmd = m_commandBuffers[imageIndex];

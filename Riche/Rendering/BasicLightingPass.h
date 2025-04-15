@@ -81,6 +81,7 @@ class BasicLightingPass : public IRenderPass {
   void RecordObjectIDPassCommands(uint32_t currentImage);
 
   // For Bloom
+  void CreateDescriptorSetLayout();
   void CreateBloomFramebuffer();
   void CreateBloomRenderPass();
   void CreateBloomExtractPipeline();

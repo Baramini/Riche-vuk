@@ -17,7 +17,7 @@ class PostProcessingPass {
  public:
   void Init(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent, const std::vector<VkImageView>& swapchainImageViews,
             BasicLightingPass* lightingPass, CullingRenderPass* shadowPass, VkFormat swapchainFormat, uint32_t maxFramesInFlight);
-  void Cleanup(VkDevice device);
+  void Cleanup();
 
   void Update(uint32_t frameIndex);
   void RecordCommands(VkCommandBuffer cmd, uint32_t frameIndex);
@@ -50,11 +50,9 @@ class PostProcessingPass {
   std::vector<VkSemaphore> m_semaphores;
   std::vector<VkImageView> m_swapchainImageViews;
 
-  std::vector<GpuImage> m_bloomExtractImages;   // 밝은 영역 추출용 텍스처
-  std::vector<GpuImage> m_bloomBlurredImagesH;  // 수평 블러
-  std::vector<GpuImage> m_bloomBlurredImagesV;  // 수직 블러
-  std::vector<GpuImage> m_finalOutputImages;    // 최종 HDR → LDR 후 텍스처 (선택)
-  std::vector<GpuImage> m_raytracingImages;
-
   uint32_t m_maxFrames = 0;
+};
+
+struct PostFXPushConstant {
+  int isEnableBloom;
 };
