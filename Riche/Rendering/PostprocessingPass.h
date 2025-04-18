@@ -1,84 +1,58 @@
-//#pragma once
-//
-//#include "BatchSystem.h"
-//#include "Components.h"
-//#include "IRenderPass.h"
-//#include "Utils/BoundingBox.h"
-//#include "Utils/ModelLoader.h"
-//#include "VkUtils/ChooseFunc.h"
-//#include "VkUtils/DescriptorBuilder.h"
-//#include "VkUtils/DescriptorManager.h"
-//#include "VkUtils/QueueFamilyIndices.h"
-//#include "VkUtils/ResourceManager.h"
-//#include "VkUtils/ShaderModule.h"
-//#include "VulkanRenderer.h"
-//
-//class Camera;
-//
-//
-//class CullingRenderPass : public IRenderPass {
-// public:
-//  CullingRenderPass() = default;
-//  CullingRenderPass(VkDevice device, VkPhysicalDevice physicalDevice);
-//  ~CullingRenderPass() = default;
-//
-//  virtual void Initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue queue, VkCommandPool commandPool, Camera* camera,
-//                          Editor* editor, const uint32_t width, const uint32_t height);
-//  virtual void Cleanup();
-//
-//  virtual void Update();
-//
-//  void SetupQueryPool();
-//  void GetQueryResults();
-//
-//  virtual void Draw(uint32_t imageIndex, VkSemaphore renderAvailable);
-//
-//  VkImageView& GetFrameBufferImageView() { return m_depthOnlyBufferImage.imageView; };
-//  VkSemaphore& GetSemaphore(uint32_t imageIndex) { return m_renderAvailable[imageIndex]; };
-//
-// private:
-//  // - Rendering Pipeline
-//  virtual void CreateRenderPass();
-//
-//  virtual void CreateFramebuffers();
-//
-//  virtual void CreatePipelineLayouts();
-//  virtual void CreatePipelines();
-//
-//
-//  virtual void CreateBuffers();
-//
-//
-//  void CreatePushConstantRange();
-//
-//  void CreateSemaphores();
-//  virtual void CreateCommandBuffers();
-//  virtual void RecordCommands(uint32_t currentImage);
-//
-// private:
-//  // - Main Objects
-//  VkDevice m_pDevice;
-//  VkPhysicalDevice m_pPhyscialDevice;
-//
-//  VkQueue m_pGraphicsQueue;
-//
-//  uint32_t m_width;
-//  uint32_t m_height;
-//  Camera* m_pCamera;
-//
-//  // - Rendering Graphics Pipeline
-//  VkCommandPool m_pGraphicsCommandPool;
-//  std::vector<VkCommandBuffer> m_commandBuffers;
-//
-//  std::vector<VkSemaphore> m_renderAvailable;
-//  std::vector<VkFence> m_fence;
-//
-//  // -- Only Depth Rendering Pipeline
-//  VkRenderPass m_depthRenderPass;
-//
-//  VkPipeline m_depthGraphicePipeline;  // Use a same GraphicsPipelineLayout
-//  VkPipelineLayout m_graphicsPipelineLayout;
-//
-//  GpuImage m_depthOnlyBufferImage;
-//  VkFramebuffer m_depthOnlyFramebuffer;  // mipmap 별로 생성.d
-//};
+#pragma once
+
+#include <vulkan/vulkan.h>
+#include <string>
+#include <vector>
+#include "Image.h"
+#include "VkUtils/ChooseFunc.h"
+#include "VkUtils/DescriptorManager.h"
+#include "VkUtils/DescriptorBuilder.h"
+#include "VkUtils/ResourceManager.h"
+#include "VkUtils/ShaderModule.h"
+
+class BasicLightingPass;
+class CullingRenderPass;
+
+class PostProcessingPass {
+ public:
+  void Init(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent, const std::vector<VkImageView>& swapchainImageViews,
+            BasicLightingPass* lightingPass, CullingRenderPass* shadowPass, VkFormat swapchainFormat, uint32_t maxFramesInFlight);
+  void Cleanup();
+
+  void Update(uint32_t frameIndex);
+  void RecordCommands(VkCommandBuffer cmd, uint32_t frameIndex);
+
+  VkRenderPass GetRenderPass() const { return m_renderPass; }
+  VkFramebuffer GetFramebuffer(uint32_t i) const { return m_framebuffers[i]; }
+  VkSemaphore GetSemaphore(uint32_t i) const { return m_semaphores[i]; }
+
+ private:
+  void CreateRenderPass();
+  void CreateFramebuffers();
+  void CreatePipeline();
+  void CreateDescriptorSets();
+
+ private:
+  VkDevice m_device = VK_NULL_HANDLE;
+  VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+  VkExtent2D m_extent{};
+
+  VkRenderPass m_renderPass = VK_NULL_HANDLE;
+  VkPipeline m_pipeline = VK_NULL_HANDLE;
+  VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+  VkFormat m_pSwapchainFormat = VK_FORMAT_UNDEFINED;
+
+  BasicLightingPass* m_pLightingPass = nullptr;
+  CullingRenderPass* m_pShadowPass = nullptr;
+
+  std::vector<VkFramebuffer> m_framebuffers;
+  std::vector<VkDescriptorSet> m_descriptorSets;
+  std::vector<VkSemaphore> m_semaphores;
+  std::vector<VkImageView> m_swapchainImageViews;
+
+  uint32_t m_maxFrames = 0;
+};
+
+struct PostFXPushConstant {
+  int isEnableBloom;
+};

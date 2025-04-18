@@ -3,6 +3,7 @@
 #include "BasicLightingPass.h"
 #include "Camera.h"
 #include "CullingRenderPass.h"
+#include "PostprocessingPass.h"
 #include "Editor/Editor.h"
 
 namespace {
@@ -218,6 +219,11 @@ void VulkanRenderer::Initialize(GLFWwindow* newWindow, Camera* camera) {
     m_pEditor->m_pCullingPass = m_pCullingRenderPass.get();
     m_pEditor->m_pLightingPass = m_pLightingRenderPass.get();
 
+    /// PostProcessing Pipeline
+    m_pPostProcessingRenderPass = std::make_shared<PostProcessingPass>();
+    m_pPostProcessingRenderPass->Init(mainDevice.logicalDevice, mainDevice.physicalDevice, swapChainExtent, GetSwapchainImageViews(),
+                                      m_pLightingRenderPass.get(), m_pCullingRenderPass.get(), swapChainImageFormat, MAX_FRAME_DRAWS);
+
     /// OffScreen Pipeline
     CreateRenderPass();
     CreateSwapchainFrameBuffers();
@@ -348,6 +354,7 @@ void VulkanRenderer::Cleanup() {
   m_pEditor->Cleanup();
   m_pCullingRenderPass->Cleanup();
   m_pLightingRenderPass->Cleanup();
+  m_pPostProcessingRenderPass->Cleanup();
 
   for (auto& batch : g_BatchManager.m_miniBatchList) {
     batch.Cleanup(mainDevice.logicalDevice);
@@ -1095,7 +1102,15 @@ void VulkanRenderer::CreateSynchronisation() {
   }
 }
 
-void VulkanRenderer::RecordCommands(uint32_t currentImage) { FillOffScreenCommands(currentImage); }
+void VulkanRenderer::RecordCommands(uint32_t currentImage) {
+  VkCommandBuffer cmd = m_swapchainCommandBuffers[currentImage];
+  VkCommandBufferBeginInfo bufferBeginInfo{};
+  bufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  bufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+  VK_CHECK(vkBeginCommandBuffer(cmd, &bufferBeginInfo));
+  m_pPostProcessingRenderPass->RecordCommands(cmd, currentImage);
+  FillOffScreenCommands(currentImage);
+}
 
 void VulkanRenderer::FillOffScreenCommands(uint32_t currentImage) {
   // information about how to begin each command buffer
@@ -1369,7 +1384,7 @@ VkSurfaceFormatKHR VulkanRenderer::ChooseBestSurfaceFormat(const std::vector<VkS
 
   // If restriceted, search for optimal format
   for (const auto& format : formats) {
-    if ((format.format == VK_FORMAT_R8G8B8A8_UNORM /* || format.format == VK_FORMAT_B8G8R8A8_UNORM*/) &&
+    if ((format.format == VK_FORMAT_R16G16B16A16_SFLOAT /* || format.format == VK_FORMAT_B8G8R8A8_UNORM*/) &&
         format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
       return format;
     }

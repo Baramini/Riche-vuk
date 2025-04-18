@@ -22,8 +22,11 @@ void BasicLightingPass::Initialize(VkDevice device, VkPhysicalDevice physicalDev
   /*
    * Create Resoureces
    */
+  CreateDescriptorSetLayout();
   CreateRenderPass();
+  CreateBloomRenderPass();
   CreateFramebuffers();
+  CreateBloomFramebuffer();
   CreateBuffers();
 
   CreatePushConstantRange();
@@ -113,6 +116,29 @@ void BasicLightingPass::Cleanup() {
     vkDestroyDescriptorSetLayout(m_pDevice, m_raytracingSetLayouts[i], nullptr);
   }
   vkDestroyDescriptorPool(m_pDevice, m_raytracingPool, nullptr);
+
+  /*
+  // For Bloom
+  g_DescriptorManager.UnregisterLayout("PostProcessInput");
+
+  for (int i = 0; i < MAX_FRAME_DRAWS; ++i) {
+    if (m_bloomFramebuffers[i] != VK_NULL_HANDLE) vkDestroyFramebuffer(m_pDevice, m_bloomFramebuffers[i], nullptr);
+
+    if (m_bloomExtractImages[i].imageView != VK_NULL_HANDLE) vkDestroyImageView(m_pDevice, m_bloomExtractImages[i].imageView, nullptr);
+
+    if (m_bloomExtractImages[i].image != VK_NULL_HANDLE) vkDestroyImage(m_pDevice, m_bloomExtractImages[i].image, nullptr);
+
+    if (m_bloomExtractImages[i].memory != VK_NULL_HANDLE) vkFreeMemory(m_pDevice, m_bloomExtractImages[i].memory, nullptr);
+
+    g_DescriptorManager.UnregisterSet("PostProcessInput" + std::to_string(i));
+  }
+
+  if (m_bloomRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_pDevice, m_bloomRenderPass, nullptr);
+
+  if (m_bloomExtractPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_pDevice, m_bloomExtractPipeline, nullptr);
+
+  if (m_bloomExtractPipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_pDevice, m_bloomExtractPipelineLayout, nullptr);
+  */
 }
 
 void BasicLightingPass::Update(uint32_t imageIndex) {
@@ -131,18 +157,18 @@ void BasicLightingPass::UpdateTLAS(uint32_t imageIndex) {
 
   {
     for (uint32_t i = 0; i < numInstances; ++i) {
-      // °¢ ÀÎ½ºÅÏ½ºº° º¯È¯Çà·Ä, customIndex, mask µî ¼¼ÆÃ
+      // ï¿½ï¿½ ï¿½Î½ï¿½ï¿½Ï½ï¿½ï¿½ï¿½ ï¿½ï¿½È¯ï¿½ï¿½ï¿½, customIndex, mask ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
       VkAccelerationStructureInstanceKHR& instance = instances[imageIndex][i];
 
       glm::mat4 curr = (g_BatchManager.m_transforms[imageIndex][i].currentTransform);
       VkTransformMatrixKHR transformMatrix = mat4ToVkTransform(curr);
       instance.transform = transformMatrix;
 
-      // ¿¹: ÇÏÀ§ ±¸Á¶(= BLAS) ÁÖ¼Ò
+      // ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½(= BLAS) ï¿½Ö¼ï¿½
       instance.accelerationStructureReference = m_bottomLevelASList[i].deviceAddress;
 
-      // ±× ¿Ü ¼Ó¼º
-      instance.instanceCustomIndex = i;  // ÀÓÀÇÀÇ ½Äº°ÀÚ
+      // ï¿½ï¿½ ï¿½ï¿½ ï¿½Ó¼ï¿½
+      instance.instanceCustomIndex = i;  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Äºï¿½ï¿½ï¿½
       instance.mask = 0xFF;
       instance.instanceShaderBindingTableRecordOffset = 0;
       instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -299,7 +325,7 @@ void BasicLightingPass::Draw(uint32_t imageIndex, VkFence fence, VkSemaphore ren
   basicSubmitInfo.pCommandBuffers = &m_commandBuffers[imageIndex];     // Command buffer to submit
   basicSubmitInfo.signalSemaphoreCount = 1;                            // Number of semaphores to signal
   basicSubmitInfo.pSignalSemaphores = &m_renderAvailable[imageIndex];  // Semaphores to signal when command buffer finishes
-  // Command buffer°¡ ½ÇÇàÀ» ¿Ï·áÇÏ¸é, Signaled »óÅÂ°¡ µÉ semaphore ¹è¿­.
+  // Command bufferï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ï·ï¿½ï¿½Ï¸ï¿½, Signaled ï¿½ï¿½ï¿½Â°ï¿½ ï¿½ï¿½ semaphore ï¿½è¿­.
 
   VK_CHECK(vkQueueSubmit(m_pGraphicsQueue, 1, &basicSubmitInfo, nullptr));
 }
@@ -317,7 +343,7 @@ void BasicLightingPass::CreateLightingRenderPass() {
   // SUBPASS 1 ATTACHMENTS (INPUT ATTACHMEMNTS)
   // Colour Attachment
   VkAttachmentDescription colourAttachment = {};
-  colourAttachment.format = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R8G8B8A8_UNORM}, VK_IMAGE_TILING_OPTIMAL,
+  colourAttachment.format = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R16G16B16A16_SFLOAT}, VK_IMAGE_TILING_OPTIMAL,
                                                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
   colourAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
   colourAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -359,7 +385,7 @@ void BasicLightingPass::CreateLightingRenderPass() {
   // Conversion from VK_IMAGE_LAYER-UNDEFINED to VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
   // Transition must happen after ..
   subpassDependencies[0].srcSubpass =
-      VK_SUBPASS_EXTERNAL;  // ¿ÜºÎ¿¡¼­ µé¾î¿À¹Ç·Î, Subpass index(VK_SUBPASS_EXTERNAL = Special value meaning outside of renderpass)
+      VK_SUBPASS_EXTERNAL;  // ï¿½ÜºÎ¿ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½, Subpass index(VK_SUBPASS_EXTERNAL = Special value meaning outside of renderpass)
   subpassDependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;  // Pipeline stage
   subpassDependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;            // Stage access mask (memory access)
   // But most happen before ..
@@ -442,7 +468,7 @@ void BasicLightingPass::CreateObjectIdRenderPass() {
   // Conversion from VK_IMAGE_LAYER-UNDEFINED to VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
   // Transition must happen after ..
   subpassDependencies[0].srcSubpass =
-      VK_SUBPASS_EXTERNAL;  // ¿ÜºÎ¿¡¼­ µé¾î¿À¹Ç·Î, Subpass index(VK_SUBPASS_EXTERNAL = Special value meaning outside of renderpass)
+      VK_SUBPASS_EXTERNAL;  // ï¿½ÜºÎ¿ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½, Subpass index(VK_SUBPASS_EXTERNAL = Special value meaning outside of renderpass)
   subpassDependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;  // Pipeline stage
   subpassDependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;            // Stage access mask (memory access)
   // But most happen before ..
@@ -486,7 +512,8 @@ void BasicLightingPass::CreateLightingFramebuffer() {
   m_depthStencilBufferImages.resize(MAX_FRAME_DRAWS);
   m_framebuffers.resize(MAX_FRAME_DRAWS);
 
-  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R8G8B8A8_UNORM}, VK_IMAGE_TILING_OPTIMAL,
+  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R16G16B16A16_SFLOAT},
+                                                              VK_IMAGE_TILING_OPTIMAL,
                                                               VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
   VkFormat depthImageFormat = VkUtils::ChooseSupportedFormat(
       m_pPhyscialDevice, {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT}, VK_IMAGE_TILING_OPTIMAL,
@@ -559,7 +586,8 @@ void BasicLightingPass::CreateObjectIdFramebuffer() {
 
 void BasicLightingPass::CreateRaytracingFramebuffer() {
   m_raytracingImages.resize(MAX_FRAME_DRAWS);
-  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R8G8B8A8_UNORM}, VK_IMAGE_TILING_OPTIMAL,
+  VkFormat colourImageFormat = VkUtils::ChooseSupportedFormat(m_pPhyscialDevice, {VK_FORMAT_R16G16B16A16_SFLOAT},
+                                                              VK_IMAGE_TILING_OPTIMAL,
                                                               VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
 
   VkCommandBuffer commandBuffer = g_ResourceManager.CreateAndBeginCommandBuffer();
@@ -577,7 +605,7 @@ void BasicLightingPass::CreateRaytracingFramebuffer() {
       imageCreateInfo.arrayLayers = 1;                            // Number of levels in image array
       imageCreateInfo.format = colourImageFormat;                 // Format type of image
       imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;           // How image data should be "tiled" (arranged for optimal reading)
-      imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // Layout of image data on creation (ÇÁ·¹ÀÓ¹öÆÛ¿¡ ¸Â°Ô º¯ÇüµÊ)
+      imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // Layout of image data on creation (ï¿½ï¿½ï¿½ï¿½ï¿½Ó¹ï¿½ï¿½Û¿ï¿½ ï¿½Â°ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½)
       imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                               VK_IMAGE_USAGE_STORAGE_BIT;       // Bit flags defining what image will be used for
       imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;          // Number of samples for multi-sampling
@@ -668,6 +696,7 @@ void BasicLightingPass::CreatePipelines() {
   CreateObjectIDPipeline();
   CreateRaytracingPipeline();
   CreateMeshShaderPipeline();
+  CreateBloomExtractPipeline();
 }
 
 void BasicLightingPass::CreateGraphicsPipeline() {
@@ -734,7 +763,7 @@ void BasicLightingPass::CreateGraphicsPipeline() {
   // -- INPUT ASSEMBLY --
   VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
   inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  // List versus Strip: ¿¬¼ÓµÈ Á¡(Strip), µü µü ²÷¾î¼­ (List)
+  // List versus Strip: ï¿½ï¿½ï¿½Óµï¿½ ï¿½ï¿½(Strip), ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½î¼­ (List)
   inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  // Primitive type to assemble vertices
   inputAssembly.primitiveRestartEnable = VK_FALSE;               // Allow overriding of "strip" topology to start new primitives
 
@@ -829,8 +858,8 @@ void BasicLightingPass::CreateGraphicsPipeline() {
   depthStencilCreateInfo.depthTestEnable = VK_TRUE;            // Enable checking depth to determine fragment wrtie
   depthStencilCreateInfo.depthWriteEnable = VK_TRUE;           // Enable writing to depth buffer (to replace old values)
   depthStencilCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;  // Comparison operation that allows an overwrite (is in front)
-  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, Áï
-                                                            // ÇÈ¼¿ÀÇ ±íÀÌ °ªÀÌ Æ¯Á¤ ¹üÀ§ ¾È¿¡ ÀÖ´ÂÁö¸¦ Ã¼Å©ÇÏ´Â °Ë»ç
+  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, ï¿½ï¿½
+                                                            // ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Æ¯ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¿ï¿½ ï¿½Ö´ï¿½ï¿½ï¿½ï¿½ï¿½ Ã¼Å©ï¿½Ï´ï¿½ ï¿½Ë»ï¿½
   depthStencilCreateInfo.stencilTestEnable = VK_FALSE;  // Enable Stencil Test
 
   // -- GRAPHICS PIPELINE CREATION --
@@ -925,7 +954,7 @@ void BasicLightingPass::CreateWireGraphicsPipeline() {
   // -- INPUT ASSEMBLY --
   VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
   inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  // List versus Strip: ¿¬¼ÓµÈ Á¡(Strip), µü µü ²÷¾î¼­ (List)
+  // List versus Strip: ï¿½ï¿½ï¿½Óµï¿½ ï¿½ï¿½(Strip), ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½î¼­ (List)
   inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  // Primitive type to assemble vertices
   inputAssembly.primitiveRestartEnable = VK_FALSE;               // Allow overriding of "strip" topology to start new primitives
 
@@ -1004,8 +1033,8 @@ void BasicLightingPass::CreateWireGraphicsPipeline() {
   depthStencilCreateInfo.depthTestEnable = VK_TRUE;            // Enable checking depth to determine fragment wrtie
   depthStencilCreateInfo.depthWriteEnable = VK_TRUE;           // Enable writing to depth buffer (to replace old values)
   depthStencilCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;  // Comparison operation that allows an overwrite (is in front)
-  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, Áï
-                                                            // ÇÈ¼¿ÀÇ ±íÀÌ °ªÀÌ Æ¯Á¤ ¹üÀ§ ¾È¿¡ ÀÖ´ÂÁö¸¦ Ã¼Å©ÇÏ´Â °Ë»ç
+  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, ï¿½ï¿½
+                                                            // ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Æ¯ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¿ï¿½ ï¿½Ö´ï¿½ï¿½ï¿½ï¿½ï¿½ Ã¼Å©ï¿½Ï´ï¿½ ï¿½Ë»ï¿½
   depthStencilCreateInfo.stencilTestEnable = VK_FALSE;  // Enable Stencil Test
 
   // -- GRAPHICS PIPELINE CREATION --
@@ -1091,7 +1120,7 @@ void BasicLightingPass::CreateBoundingBoxPipeline() {
   // -- INPUT ASSEMBLY --
   VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
   inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  // List versus Strip: ¿¬¼ÓµÈ Á¡(Strip), µü µü ²÷¾î¼­ (List)
+  // List versus Strip: ï¿½ï¿½ï¿½Óµï¿½ ï¿½ï¿½(Strip), ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½î¼­ (List)
   inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  // Primitive type to assemble vertices
   inputAssembly.primitiveRestartEnable = VK_FALSE;               // Allow overriding of "strip" topology to start new primitives
 
@@ -1170,8 +1199,8 @@ void BasicLightingPass::CreateBoundingBoxPipeline() {
   depthStencilCreateInfo.depthTestEnable = VK_TRUE;            // Enable checking depth to determine fragment wrtie
   depthStencilCreateInfo.depthWriteEnable = VK_TRUE;           // Enable writing to depth buffer (to replace old values)
   depthStencilCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;  // Comparison operation that allows an overwrite (is in front)
-  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, Áï
-                                                            // ÇÈ¼¿ÀÇ ±íÀÌ °ªÀÌ Æ¯Á¤ ¹üÀ§ ¾È¿¡ ÀÖ´ÂÁö¸¦ Ã¼Å©ÇÏ´Â °Ë»ç
+  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, ï¿½ï¿½
+                                                            // ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Æ¯ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¿ï¿½ ï¿½Ö´ï¿½ï¿½ï¿½ï¿½ï¿½ Ã¼Å©ï¿½Ï´ï¿½ ï¿½Ë»ï¿½
   depthStencilCreateInfo.stencilTestEnable = VK_FALSE;  // Enable Stencil Test
 
   // -- GRAPHICS PIPELINE CREATION --
@@ -1266,7 +1295,7 @@ void BasicLightingPass::CreateObjectIDPipeline() {
   // -- INPUT ASSEMBLY --
   VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
   inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  // List versus Strip: ¿¬¼ÓµÈ Á¡(Strip), µü µü ²÷¾î¼­ (List)
+  // List versus Strip: ï¿½ï¿½ï¿½Óµï¿½ ï¿½ï¿½(Strip), ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½î¼­ (List)
   inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  // Primitive type to assemble vertices
   inputAssembly.primitiveRestartEnable = VK_FALSE;               // Allow overriding of "strip" topology to start new primitives
 
@@ -1345,8 +1374,8 @@ void BasicLightingPass::CreateObjectIDPipeline() {
   depthStencilCreateInfo.depthTestEnable = VK_TRUE;            // Enable checking depth to determine fragment wrtie
   depthStencilCreateInfo.depthWriteEnable = VK_TRUE;           // Enable writing to depth buffer (to replace old values)
   depthStencilCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;  // Comparison operation that allows an overwrite (is in front)
-  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, Áï
-                                                            // ÇÈ¼¿ÀÇ ±íÀÌ °ªÀÌ Æ¯Á¤ ¹üÀ§ ¾È¿¡ ÀÖ´ÂÁö¸¦ Ã¼Å©ÇÏ´Â °Ë»ç
+  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, ï¿½ï¿½
+                                                            // ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Æ¯ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¿ï¿½ ï¿½Ö´ï¿½ï¿½ï¿½ï¿½ï¿½ Ã¼Å©ï¿½Ï´ï¿½ ï¿½Ë»ï¿½
   depthStencilCreateInfo.stencilTestEnable = VK_FALSE;  // Enable Stencil Test
 
   // -- GRAPHICS PIPELINE CREATION --
@@ -1582,8 +1611,8 @@ void BasicLightingPass::CreateMeshShaderPipeline() {
   depthStencilCreateInfo.depthTestEnable = VK_TRUE;            // Enable checking depth to determine fragment wrtie
   depthStencilCreateInfo.depthWriteEnable = VK_TRUE;           // Enable writing to depth buffer (to replace old values)
   depthStencilCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;  // Comparison operation that allows an overwrite (is in front)
-  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, Áï
-                                                            // ÇÈ¼¿ÀÇ ±íÀÌ °ªÀÌ Æ¯Á¤ ¹üÀ§ ¾È¿¡ ÀÖ´ÂÁö¸¦ Ã¼Å©ÇÏ´Â °Ë»ç
+  depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;     // Depth Bounds Test: Does the depth value exist between two bounds, ï¿½ï¿½
+                                                            // ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Æ¯ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¿ï¿½ ï¿½Ö´ï¿½ï¿½ï¿½ï¿½ï¿½ Ã¼Å©ï¿½Ï´ï¿½ ï¿½Ë»ï¿½
   depthStencilCreateInfo.stencilTestEnable = VK_FALSE;  // Enable Stencil Test
 
   // -- GRAPHICS PIPELINE CREATION --
@@ -1706,7 +1735,7 @@ void BasicLightingPass::CreateRaytracingDescriptorSets() {
 */
 void BasicLightingPass::CreateBLAS() {
   /*
-      ¿©·¯ BLAS »ý¼º
+      ï¿½ï¿½ï¿½ï¿½ BLAS ï¿½ï¿½ï¿½ï¿½
   */
   m_bottomLevelASList.reserve(g_BatchManager.m_meshes.size());
   scratchBuffers.reserve(g_BatchManager.m_meshes.size());
@@ -1820,18 +1849,18 @@ void BasicLightingPass::CreateTLAS() {
   for (int cur = 0; cur < MAX_FRAME_DRAWS; ++cur) {
     instances[cur].resize(numInstances);
     for (uint32_t i = 0; i < numInstances; ++i) {
-      // °¢ ÀÎ½ºÅÏ½ºº° º¯È¯Çà·Ä, customIndex, mask µî ¼¼ÆÃ
+      // ï¿½ï¿½ ï¿½Î½ï¿½ï¿½Ï½ï¿½ï¿½ï¿½ ï¿½ï¿½È¯ï¿½ï¿½ï¿½, customIndex, mask ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
       VkAccelerationStructureInstanceKHR& instance = instances[cur][i];
 
       glm::mat4 curr = (g_BatchManager.m_transforms[cur][i].currentTransform);
       VkTransformMatrixKHR transformMatrix = mat4ToVkTransform(curr);
       instance.transform = transformMatrix;
 
-      // ¿¹: ÇÏÀ§ ±¸Á¶(= BLAS) ÁÖ¼Ò
+      // ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½(= BLAS) ï¿½Ö¼ï¿½
       instance.accelerationStructureReference = m_bottomLevelASList[i].deviceAddress;
 
-      // ±× ¿Ü ¼Ó¼º
-      instance.instanceCustomIndex = i;  // ÀÓÀÇÀÇ ½Äº°ÀÚ
+      // ï¿½ï¿½ ï¿½ï¿½ ï¿½Ó¼ï¿½
+      instance.instanceCustomIndex = i;  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Äºï¿½ï¿½ï¿½
       instance.mask = 0xFF;
       instance.instanceShaderBindingTableRecordOffset = 0;
       instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -1970,7 +1999,7 @@ void BasicLightingPass::CreateCommandBuffers() {
   VkCommandBufferAllocateInfo cbAllocInfo = {};
   cbAllocInfo = {};
   cbAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  cbAllocInfo.commandPool = m_pGraphicsCommandPool;  // ÇØ´ç Å¥ ÆÐ¹Ð¸®ÀÇ Å¥¿¡¼­¸¸ Ä¿¸Çµå Å¥ µ¿ÀÛÀÌ ½ÇÇà°¡´ÉÇÏ´Ù.
+  cbAllocInfo.commandPool = m_pGraphicsCommandPool;  // ï¿½Ø´ï¿½ Å¥ ï¿½Ð¹Ð¸ï¿½ï¿½ï¿½ Å¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Ä¿ï¿½Çµï¿½ Å¥ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½à°¡ï¿½ï¿½ï¿½Ï´ï¿½.
   cbAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;  // VK_COMMAND_BUFFER_LEVEL_PRIMARY		: buffer you submit directly to
                                                         // queue. cant be called by other buffers
   // VK_COMMAND_BUFFER_LEVEL_SECONDARY	: buffer can't be called directly. Can be called from other buffers via
@@ -2044,12 +2073,47 @@ void BasicLightingPass::RecordCommands(uint32_t currentImage) {
 
   vkCmdEndRenderPass(m_commandBuffers[currentImage]);
 
+  // Begin Bloom Pass
+  VkRenderPassBeginInfo bloomRenderPassInfo{};
+  bloomRenderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  bloomRenderPassInfo.renderPass = m_bloomRenderPass;
+  bloomRenderPassInfo.renderArea.offset = {0, 0};
+  bloomRenderPassInfo.renderArea.extent = {m_width, m_height};
+
+  VkClearValue bloomClearColor{};
+  bloomClearColor.color = {0.0f, 0.0f, 0.0f, 1.0f};
+  bloomRenderPassInfo.clearValueCount = 1;
+  bloomRenderPassInfo.pClearValues = &bloomClearColor;
+  bloomRenderPassInfo.framebuffer = m_bloomFramebuffers[currentImage];
+
+  // Begin Render Pass
+  vkCmdBeginRenderPass(m_commandBuffers[currentImage], &bloomRenderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+  // Record Bloom Extract Commands
+  vkCmdBindPipeline(m_commandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipeline);
+
+  VkDescriptorSet sets[] = {g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"),
+                            g_DescriptorManager.GetVkDescriptorSet("PostProcessInput" + std::to_string(currentImage))};
+
+  vkCmdBindDescriptorSets(m_commandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipelineLayout, 0, 2, sets, 0,
+                          nullptr);
+
+  vkCmdDraw(m_commandBuffers[currentImage], 3, 1, 0, 0);
+
+  // End Render Pass
+  vkCmdEndRenderPass(m_commandBuffers[currentImage]);
+
+
+
   VkUtils::CmdImageBarrier(m_commandBuffers[currentImage], m_colourBufferImages[currentImage].image,
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_IMAGE_ASPECT_COLOR_BIT);
   VkUtils::CmdImageBarrier(m_commandBuffers[currentImage], m_depthStencilBufferImages[currentImage].image,
                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                            VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+  VkUtils::CmdImageBarrier(m_commandBuffers[currentImage], m_bloomExtractImages[currentImage].image,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_IMAGE_ASPECT_COLOR_BIT);
 
   // Stop recording commands to command buffer!
   VK_CHECK(vkEndCommandBuffer(m_commandBuffers[currentImage]));
@@ -2211,4 +2275,267 @@ void BasicLightingPass::RecordObjectIDPassCommands(uint32_t currentImage) {
     );
     g_ShaderSetting.batchIdx += miniBatch.m_drawIndexedCommands.size();
   }
+}
+
+void BasicLightingPass::CreateDescriptorSetLayout() {
+  VkDescriptorSetLayoutBinding bindings[3]{};
+
+  bindings[0] = VkUtils::DescriptorSetLayoutBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+  bindings[1] = VkUtils::DescriptorSetLayoutBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+  bindings[2] = VkUtils::DescriptorSetLayoutBinding(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+  VkDescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 3;
+  layoutInfo.pBindings = bindings;
+
+  VkDescriptorSetLayout layout;
+  VK_CHECK(vkCreateDescriptorSetLayout(m_pDevice, &layoutInfo, nullptr, &layout));
+
+  g_DescriptorManager.RegisterSetLayout("PostProcessInput", layout);
+}
+
+void BasicLightingPass::CreateBloomRenderPass() {
+  VkAttachmentDescription colorAttachment{};
+  colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;  // HDR ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+  colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+  VkAttachmentReference colorRef{};
+  colorRef.attachment = 0;
+  colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+  VkSubpassDescription subpass{};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &colorRef;
+
+  VkSubpassDependency dependency{};
+  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependency.dstSubpass = 0;
+  dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+  VkRenderPassCreateInfo renderPassInfo{};
+  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  renderPassInfo.attachmentCount = 1;
+  renderPassInfo.pAttachments = &colorAttachment;
+  renderPassInfo.subpassCount = 1;
+  renderPassInfo.pSubpasses = &subpass;
+  renderPassInfo.dependencyCount = 1;
+  renderPassInfo.pDependencies = &dependency;
+
+  VK_CHECK(vkCreateRenderPass(m_pDevice, &renderPassInfo, nullptr, &m_bloomRenderPass));
+}
+
+void BasicLightingPass::CreateBloomFramebuffer() {
+  m_bloomExtractImages.resize(MAX_FRAME_DRAWS);
+  m_bloomFramebuffers.resize(MAX_FRAME_DRAWS);
+
+  for (uint32_t i = 0; i < MAX_FRAME_DRAWS; ++i) {
+    // 1. Image + Memory ï¿½ï¿½ï¿½ï¿½
+    VK_CHECK(VkUtils::CreateImage2D(m_pDevice, m_pPhyscialDevice, m_width, m_height, &m_bloomExtractImages[i].memory,
+                                    &m_bloomExtractImages[i].image, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+
+    // 2. ImageView ï¿½ï¿½ï¿½ï¿½
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_bloomExtractImages[i].image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    viewInfo.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                           VK_COMPONENT_SWIZZLE_IDENTITY};
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VK_CHECK(vkCreateImageView(m_pDevice, &viewInfo, nullptr, &m_bloomExtractImages[i].imageView));
+
+    // 3. Framebuffer ï¿½ï¿½ï¿½ï¿½
+    VkImageView attachments[] = {m_bloomExtractImages[i].imageView};
+    VkFramebufferCreateInfo framebufferInfo{};
+    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebufferInfo.renderPass = m_bloomRenderPass;
+    framebufferInfo.attachmentCount = 1;
+    framebufferInfo.pAttachments = attachments;
+    framebufferInfo.width = m_width;
+    framebufferInfo.height = m_height;
+    framebufferInfo.layers = 1;
+
+    VK_CHECK(vkCreateFramebuffer(m_pDevice, &framebufferInfo, nullptr, &m_bloomFramebuffers[i]));
+
+    // 4. DescriptorSet ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (ï¿½ï¿½ï¿½ï¿½ Layout ï¿½ï¿½ï¿½)
+    VkDescriptorImageInfo inputColour{};
+    inputColour.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    inputColour.imageView = m_colourBufferImages[i].imageView;
+    inputColour.sampler = VK_NULL_HANDLE;
+
+    VkDescriptorImageInfo shadow{};
+    shadow.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    shadow.imageView = m_depthStencilBufferImages[i].imageView;
+    shadow.sampler = VK_NULL_HANDLE;
+
+    VkDescriptorImageInfo bloom{};
+    bloom.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    bloom.imageView = m_bloomExtractImages[i].imageView;
+    bloom.sampler = VK_NULL_HANDLE;
+
+    auto builder = VkUtils::DescriptorBuilder::Begin(&g_DescriptorLayoutCache, &g_DescriptorAllocator);
+    builder.BindImage(0, &inputColour, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.BindImage(1, &shadow, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+    builder.BindImage(2, &bloom, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    VkDescriptorSet descriptorSet;
+    builder.Build(descriptorSet, g_DescriptorManager.GetVkDescriptorSetLayout("PostProcessInput"));
+
+    std::string name = "PostProcessInput" + std::to_string(i);
+    g_DescriptorManager.RegisterSet(name, descriptorSet);
+  }
+}
+
+void BasicLightingPass::CreateBloomExtractPipeline() {
+  auto vertShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingVS.spv");
+  auto fragShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingPS.spv");
+
+  VkShaderModule vertShaderModule = VkUtils::CreateShaderModule(m_pDevice, vertShaderCode);
+  VkShaderModule fragShaderModule = VkUtils::CreateShaderModule(m_pDevice, fragShaderCode);
+
+  VkPipelineShaderStageCreateInfo shaderStages[2] = {};
+
+  shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+  shaderStages[0].module = vertShaderModule;
+  shaderStages[0].pName = "main";
+
+  shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+  shaderStages[1].module = fragShaderModule;
+  shaderStages[1].pName = "main";
+
+  VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
+  vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+  VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
+  inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+  VkViewport viewport{};
+  viewport.x = 0.0f;
+  viewport.y = 0.0f;
+  viewport.width = static_cast<float>(m_width);
+  viewport.height = static_cast<float>(m_height);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+
+  VkRect2D scissor{};
+  scissor.offset = {0, 0};
+  scissor.extent = {m_width, m_height};
+
+  VkPipelineViewportStateCreateInfo viewportState{};
+  viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  viewportState.viewportCount = 1;
+  viewportState.pViewports = &viewport;
+  viewportState.scissorCount = 1;
+  viewportState.pScissors = &scissor;
+
+  VkPipelineRasterizationStateCreateInfo rasterizer{};
+  rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+  rasterizer.cullMode = VK_CULL_MODE_NONE;
+  rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  rasterizer.lineWidth = 1.0f;
+
+  VkPipelineMultisampleStateCreateInfo multisampling{};
+  multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+  VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+  colorBlendAttachment.colorWriteMask =
+      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  colorBlendAttachment.blendEnable = VK_FALSE;
+
+  VkPipelineColorBlendStateCreateInfo colorBlending{};
+  colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  colorBlending.attachmentCount = 1;
+  colorBlending.pAttachments = &colorBlendAttachment;
+
+  std::vector<VkDescriptorSetLayout> setLayouts = {
+      g_DescriptorManager.GetVkDescriptorSetLayout("SamplerList_ALL"),
+      g_DescriptorManager.GetVkDescriptorSetLayout("PostProcessInput")  // ï¿½ï¿½ï¿½ï¿½ Layout ï¿½Ì¸ï¿½
+  };
+
+  VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+  pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+  pipelineLayoutInfo.pSetLayouts = setLayouts.data();
+
+  VK_CHECK(vkCreatePipelineLayout(m_pDevice, &pipelineLayoutInfo, nullptr, &m_bloomExtractPipelineLayout));
+
+  VkGraphicsPipelineCreateInfo pipelineInfo{};
+  pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  pipelineInfo.stageCount = 2;
+  pipelineInfo.pStages = shaderStages;
+  pipelineInfo.pVertexInputState = &vertexInputInfo;
+  pipelineInfo.pInputAssemblyState = &inputAssembly;
+  pipelineInfo.pViewportState = &viewportState;
+  pipelineInfo.pRasterizationState = &rasterizer;
+  pipelineInfo.pMultisampleState = &multisampling;
+  pipelineInfo.pColorBlendState = &colorBlending;
+  pipelineInfo.layout = m_bloomExtractPipelineLayout;
+  pipelineInfo.renderPass = m_bloomRenderPass;
+  pipelineInfo.subpass = 0;
+
+  VK_CHECK(vkCreateGraphicsPipelines(m_pDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_bloomExtractPipeline));
+
+  vkDestroyShaderModule(m_pDevice, vertShaderModule, nullptr);
+  vkDestroyShaderModule(m_pDevice, fragShaderModule, nullptr);
+}
+
+void BasicLightingPass::RecordBloomExtractCommands(uint32_t imageIndex) {
+  VkCommandBuffer cmd = m_commandBuffers[imageIndex];
+
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+  VK_CHECK(vkBeginCommandBuffer(cmd, &beginInfo));
+
+  VkClearValue clearColor{};
+  clearColor.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+
+  VkRenderPassBeginInfo renderPassInfo{};
+  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  renderPassInfo.renderPass = m_bloomRenderPass;
+  renderPassInfo.framebuffer = m_bloomFramebuffers[imageIndex];
+  renderPassInfo.renderArea.offset = {0, 0};
+  renderPassInfo.renderArea.extent = {m_width, m_height};
+  renderPassInfo.clearValueCount = 1;
+  renderPassInfo.pClearValues = &clearColor;
+
+  vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+  // Bind pipeline
+  vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipeline);
+
+  // Bind descriptor sets (ï¿½ï¿½ï¿½ï¿½ ï¿½Ø½ï¿½Ã³)
+  VkDescriptorSet sets[] = {g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"),
+                            g_DescriptorManager.GetVkDescriptorSet("OffScreenInput" + std::to_string(imageIndex))};
+
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_bloomExtractPipelineLayout, 0, 2, sets, 0, nullptr);
+
+  // Fullscreen triangle
+  vkCmdDraw(cmd, 3, 1, 0, 0);
+
+  vkCmdEndRenderPass(cmd);
+
+  VK_CHECK(vkEndCommandBuffer(cmd));
 }

@@ -35,6 +35,12 @@ class BasicLightingPass : public IRenderPass {
   VkImageView& GetDepthStencilImageView(uint32_t imageIndex) { return m_depthStencilBufferImages[imageIndex].imageView; };
   VkSemaphore& GetSemaphore(uint32_t imageIndex) { return m_renderAvailable[imageIndex]; };
 
+  VkImageView& GetOutputImageView(uint32_t frameIndex) { return m_colourBufferImages[frameIndex].imageView; };
+  VkImageView& GetBloomImageView(uint32_t frameIndex) { return m_bloomExtractImages[frameIndex].imageView; };
+
+  size_t GetColorBufferImageSize() const { return m_colourBufferImages.size(); }
+  size_t GetBloomImageSize() const { return m_bloomExtractImages.size(); }
+
  private:
   virtual void CreateRenderPass();
   void CreateLightingRenderPass();
@@ -76,6 +82,13 @@ class BasicLightingPass : public IRenderPass {
   void RecordRaytracingShadowCommands(uint32_t currentImage);
   void RecordBoundingBoxCommands(uint32_t currentImage);
   void RecordObjectIDPassCommands(uint32_t currentImage);
+
+  // For Bloom
+  void CreateDescriptorSetLayout();
+  void CreateBloomFramebuffer();
+  void CreateBloomRenderPass();
+  void CreateBloomExtractPipeline();
+  void RecordBloomExtractCommands(uint32_t imageIndex);
 
  private:
   Editor* m_pEditor;
@@ -155,4 +168,13 @@ class BasicLightingPass : public IRenderPass {
 
   std::vector<VkFramebuffer> m_framebuffers;
   VkFramebuffer m_objectIdFramebuffer;
+
+  // For Bloom
+  VkRenderPass m_bloomRenderPass;
+
+  std::vector<GpuImage> m_bloomExtractImages;
+  std::vector<VkFramebuffer> m_bloomFramebuffers;
+
+  VkPipeline m_bloomExtractPipeline = VK_NULL_HANDLE;
+  VkPipelineLayout m_bloomExtractPipelineLayout = VK_NULL_HANDLE;
 };

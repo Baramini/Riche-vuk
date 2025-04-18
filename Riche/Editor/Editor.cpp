@@ -419,6 +419,7 @@ void Editor::RenderImGui(VkCommandBuffer commandBuffer, uint32_t currentImage) {
   }
   ImGui::Checkbox("Occlusion Culling", &(g_RenderSetting.isOcclusionCulling));
   ImGui::Checkbox("View BoundingBox", &(g_RenderSetting.isRenderBoundingBox));
+  ImGui::Checkbox("Enable Bloom", &(g_RenderSetting.isEnableBloom));
   ImGui::SliderFloat4("Light Pos", glm::value_ptr(g_ShaderSetting.lightPos), -5.0f, 5.0f);
   ImGui::SliderFloat4("Light Color", glm::value_ptr(g_ShaderSetting.lightColor), 0.0f, 1.0f);
   ImGui::SliderFloat("Ambient", &g_ShaderSetting.ambientStrength, 0.0f, 1.0f);
