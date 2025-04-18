@@ -204,9 +204,11 @@
     <ClInclude Include="Utils\TaskQueue.h" />
     <ClInclude Include="Utils\TextureUtils.h" />
     <ClInclude Include="Utils\ThreadPool.h" />
+    <ClInclude Include="VkUtils\DescriptorAllocator.h" />
     <ClInclude Include="VkUtils\DescriptorBuilder.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Rendering\Components.h" />
+    <ClInclude Include="VkUtils\DescriptorLayoutCache.h" />
     <ClInclude Include="VkUtils\DescriptorManager.h" />
     <ClInclude Include="Rendering\VulkanRenderer.h" />
     <ClInclude Include="VkUtils\QueueFamilyIndices.h" />

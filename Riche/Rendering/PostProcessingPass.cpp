@@ -1,303 +1,237 @@
-#include "PostProcessingPass.h"
+ï»¿#include "PostProcessingPass.h"
+
+#include <stdexcept>
+
 #include "BasicLightingPass.h"
-#include "CullingRenderPass.h"
+#include "VkUtils/DescriptorAllocator.h"
+#include "VkUtils/DescriptorBuilder.h"
+#include "VkUtils/DescriptorLayoutCache.h"
+#include "VkUtils/ResourceManager.h"
 
 void PostProcessingPass::Init(VkDevice device, VkPhysicalDevice physicalDevice, VkExtent2D extent,
                               const std::vector<VkImageView>& swapchainImageViews, BasicLightingPass* lightingPass,
-                              CullingRenderPass* shadowPass, VkFormat swapchainFormat, uint32_t maxFramesInFlight) {
+                              CullingRenderPass* /*shadowPass*/,  // unused
+                              VkFormat swapchainFormat, uint32_t maxFramesInFlight) {
   m_device = device;
   m_physicalDevice = physicalDevice;
   m_extent = extent;
-  m_maxFrames = maxFramesInFlight;
   m_swapchainImageViews = swapchainImageViews;
-  m_pSwapchainFormat = swapchainFormat;
-
   m_pLightingPass = lightingPass;
-  m_pShadowPass = shadowPass;
+  m_swapchainFormat = swapchainFormat;
+  m_maxFrames = maxFramesInFlight;
 
+  CreateDescriptorSetLayout();  // registers "PostProcessInput"
   CreateRenderPass();
+  CreatePipeline();
   CreateFramebuffers();
   CreateDescriptorSets();
-  CreatePipeline();
 }
 
 void PostProcessingPass::Cleanup() {
-  /*
-  // ÆÄÀÌÇÁ¶óÀÎ ¹× ·¹ÀÌ¾Æ¿ô Á¦°Å
-  if (m_pipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_pipeline, nullptr);
-
-  if (m_pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
-
-  // ·»´õ ÆÐ½º Á¦°Å
-  if (m_renderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_device, m_renderPass, nullptr);
-
-  // ÇÁ·¹ÀÓ¹öÆÛ Á¦°Å
-  for (auto& fb : m_framebuffers) {
-    if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(m_device, fb, nullptr);
+  for (auto fb : m_framebuffers) {
+    vkDestroyFramebuffer(m_device, fb, nullptr);
   }
-  */
-}
+  vkDestroyPipeline(m_device, m_pipeline, nullptr);
+  vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
+  vkDestroyRenderPass(m_device, m_renderPass, nullptr);
+  vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
 
-void PostProcessingPass::CreateRenderPass() {
-  VkAttachmentDescription colorAttachment = {};
-  colorAttachment.format = m_pSwapchainFormat;  // ¶Ç´Â ¿ÜºÎ¿¡¼­ ¹Þ¾Æ¿Â swapchain format »ç¿ë °¡´É
-  colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-  colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-  VkAttachmentReference colorAttachmentRef = {};
-  colorAttachmentRef.attachment = 0;
-  colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-  VkSubpassDescription subpass = {};
-  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-  subpass.colorAttachmentCount = 1;
-  subpass.pColorAttachments = &colorAttachmentRef;
-
-  std::array<VkSubpassDependency, 2> dependencies{};
-
-  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-  dependencies[0].dstSubpass = 0;
-  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  dependencies[0].dependencyFlags = 0;
-
-  dependencies[1].srcSubpass = 0;
-  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  dependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-  dependencies[1].dependencyFlags = 0;
-
-  VkRenderPassCreateInfo renderPassInfo = {};
-  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  renderPassInfo.attachmentCount = 1;
-  renderPassInfo.pAttachments = &colorAttachment;
-  renderPassInfo.subpassCount = 1;
-  renderPassInfo.pSubpasses = &subpass;
-  renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
-  renderPassInfo.pDependencies = dependencies.data();
-
-  VK_CHECK(vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_renderPass));
-}
-
-void PostProcessingPass::CreateFramebuffers() {
-  m_framebuffers.resize(m_maxFrames);
-
-  for (uint32_t i = 0; i < m_maxFrames; ++i) {
-    VkImageView attachments[] = {
-        m_swapchainImageViews[i]  // ¿ÜºÎ¿¡¼­ ¹ÞÀº Swapchain ImageView
-    };
-
-    VkFramebufferCreateInfo framebufferInfo = {};
-    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebufferInfo.renderPass = m_renderPass;  // PostProcessing Àü¿ë ·»´õÆÐ½º
-    framebufferInfo.attachmentCount = 1;
-    framebufferInfo.pAttachments = attachments;
-    framebufferInfo.width = m_extent.width;
-    framebufferInfo.height = m_extent.height;
-    framebufferInfo.layers = 1;
-
-    VK_CHECK(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffers[i]));
-
-    std::cout << "[PostProcessingPass] Framebuffer " << i << " created successfully." << std::endl;
+  // Unregister sets/layout from DescriptorManager
+  for (uint32_t i = 0; i < m_swapchainImageViews.size(); ++i) {
+    g_DescriptorManager.UnregisterSet("PostProcessInput" + std::to_string(i));
   }
-}
-
-
-void PostProcessingPass::CreateDescriptorSets() {
-  m_descriptorSets.resize(m_maxFrames);
-
-  for (uint32_t i = 0; i < m_maxFrames; ++i) {
-    // Lighting ÅØ½ºÃ³
-    VkDescriptorImageInfo inputColour = {};
-    inputColour.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    inputColour.imageView = m_pLightingPass->GetOutputImageView(i);
-    inputColour.sampler = VK_NULL_HANDLE;
-
-    // Shadow ÅØ½ºÃ³
-    VkDescriptorImageInfo shadow = {};
-    shadow.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    shadow.imageView = m_pShadowPass->GetFrameBufferImageView();
-    shadow.sampler = VK_NULL_HANDLE;
-
-    // Bloom ÅØ½ºÃ³
-    VkDescriptorImageInfo bloom = {};
-    bloom.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    bloom.imageView = m_pLightingPass->GetBloomImageView(i);
-    bloom.sampler = VK_NULL_HANDLE;
-
-    // Descriptor Set »ý¼º
-    auto builder = VkUtils::DescriptorBuilder::Begin(&g_DescriptorLayoutCache, &g_DescriptorAllocator);
-
-    builder.BindImage(0, &inputColour, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
-    builder.BindImage(1, &shadow, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
-    builder.BindImage(2, &bloom, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT);
-
-    VkDescriptorSet descriptorSet;
-    VkDescriptorSetLayout layout = g_DescriptorManager.GetVkDescriptorSetLayout("PostProcessInput");
-
-    builder.Build(descriptorSet, layout);  // ÀÌ¹Ì ¸¸µé¾îµÐ °øÅë ·¹ÀÌ¾Æ¿ô »ç¿ë
-
-    // DescriptorSet µî·Ï¸¸ ¼öÇà
-    std::string name = "PostProcessInput" + std::to_string(i);
-    g_DescriptorManager.RegisterSet(name, descriptorSet);
-
-    m_descriptorSets[i] = descriptorSet;
-  }
-}
-
-
-void PostProcessingPass::CreatePipeline() {
-  if (!g_DescriptorManager.HasDescriptorSetLayout("PostProcessInput")) {
-    std::cerr << "[ERROR] PostProcessInput DescriptorSetLayout not found!" << std::endl;
-  }
-
-  // 1. Shader Modules
-  auto vertShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingVS.spv");
-  auto fragShaderCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingPS.spv");
-
-  VkShaderModule vertShaderModule = VkUtils::CreateShaderModule(m_device, vertShaderCode);
-  VkShaderModule fragShaderModule = VkUtils::CreateShaderModule(m_device, fragShaderCode);
-
-  VkPipelineShaderStageCreateInfo shaderStages[2] = {};
-  shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-  shaderStages[0].module = vertShaderModule;
-  shaderStages[0].pName = "main";
-
-  shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-  shaderStages[1].module = fragShaderModule;
-  shaderStages[1].pName = "main";
-
-  // 2. Fixed Function Stages
-  VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-  vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-  VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-  inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-  VkViewport viewport{};
-  viewport.x = 0.0f;
-  viewport.y = 0.0f;
-  viewport.width = static_cast<float>(m_extent.width);
-  viewport.height = static_cast<float>(m_extent.height);
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-
-  VkRect2D scissor{};
-  scissor.offset = {0, 0};
-  scissor.extent = m_extent;
-
-  VkPipelineViewportStateCreateInfo viewportState{};
-  viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-  viewportState.viewportCount = 1;
-  viewportState.pViewports = &viewport;
-  viewportState.scissorCount = 1;
-  viewportState.pScissors = &scissor;
-
-  VkPipelineRasterizationStateCreateInfo rasterizer{};
-  rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-  rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-  rasterizer.cullMode = VK_CULL_MODE_NONE;
-  rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-  rasterizer.lineWidth = 1.0f;
-
-  VkPipelineMultisampleStateCreateInfo multisampling{};
-  multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-  multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-  VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-  colorBlendAttachment.colorWriteMask =
-      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-  colorBlendAttachment.blendEnable = VK_FALSE;
-
-  VkPipelineColorBlendStateCreateInfo colorBlending{};
-  colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-  colorBlending.attachmentCount = 1;
-  colorBlending.pAttachments = &colorBlendAttachment;
-
-  // 3. Descriptor Set Layouts
-  std::vector<VkDescriptorSetLayout> setLayouts = {g_DescriptorManager.GetVkDescriptorSetLayout("SamplerList_ALL"),
-                                                   g_DescriptorManager.GetVkDescriptorSetLayout("PostProcessInput")};
-
-  // 4. Push Constant Range
-  VkPushConstantRange pushConstantRange{};
-  pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-  pushConstantRange.offset = 0;
-  pushConstantRange.size = sizeof(PostFXPushConstant);
-
-  // 5. Pipeline Layout
-  VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-  pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-  pipelineLayoutInfo.pSetLayouts = setLayouts.data();
-  pipelineLayoutInfo.pushConstantRangeCount = 1;
-  pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-
-  VK_CHECK(vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout));
-
-  // 6. Graphics Pipeline
-  VkGraphicsPipelineCreateInfo pipelineInfo{};
-  pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-  pipelineInfo.stageCount = 2;
-  pipelineInfo.pStages = shaderStages;
-  pipelineInfo.pVertexInputState = &vertexInputInfo;
-  pipelineInfo.pInputAssemblyState = &inputAssembly;
-  pipelineInfo.pViewportState = &viewportState;
-  pipelineInfo.pRasterizationState = &rasterizer;
-  pipelineInfo.pMultisampleState = &multisampling;
-  pipelineInfo.pColorBlendState = &colorBlending;
-  pipelineInfo.layout = m_pipelineLayout;
-  pipelineInfo.renderPass = m_renderPass;
-  pipelineInfo.subpass = 0;
-
-  VK_CHECK(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline));
-
-  // 7. Clean Up Shader Modules
-  vkDestroyShaderModule(m_device, vertShaderModule, nullptr);
-  vkDestroyShaderModule(m_device, fragShaderModule, nullptr);
+  g_DescriptorManager.UnregisterLayout("PostProcessInput");
 }
 
 void PostProcessingPass::RecordCommands(VkCommandBuffer cmd, uint32_t frameIndex) {
-  // -- Begin Render Pass --
-  VkClearValue clearColor{};
-  clearColor.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+  VkClearValue clearColor{{0.0f, 0.0f, 0.0f, 1.0f}};
+  VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+  rpbi.renderPass = m_renderPass;
+  rpbi.framebuffer = m_framebuffers[frameIndex];
+  rpbi.renderArea.extent = m_extent;
+  rpbi.clearValueCount = 1;
+  rpbi.pClearValues = &clearColor;
+  vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
-  VkRenderPassBeginInfo renderPassInfo{};
-  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-  renderPassInfo.renderPass = m_renderPass;
-  renderPassInfo.framebuffer = m_framebuffers[frameIndex];
-  renderPassInfo.renderArea.offset = {0, 0};
-  renderPassInfo.renderArea.extent = m_extent;
-  renderPassInfo.clearValueCount = 1;
-  renderPassInfo.pClearValues = &clearColor;
-
-  vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-  // -- Bind Pipeline --
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+  auto descSet = g_DescriptorManager.GetVkDescriptorSet("PostProcessInput" + std::to_string(frameIndex));
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &descSet, 0, nullptr);
 
-  // -- Bind Descriptor Sets --
-  VkDescriptorSet sets[] = {g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"), m_descriptorSets[frameIndex]};
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 2, sets, 0, nullptr);
+  PostFXPushConstant pc{/* isEnableBloom = */ 1};
+  vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
-  // -- Push Constants (Enable/Disable Bloom) --
-  PostFXPushConstant pushConstant{};
-  pushConstant.isEnableBloom = g_RenderSetting.isEnableBloom ? 1 : 0;
-  vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PostFXPushConstant), &pushConstant);
-
-  // -- Draw Fullscreen Triangle --
-  vkCmdDraw(cmd, 3, 1, 0, 0);  // full-screen triangle
-
+  vkCmdDraw(cmd, 3, 1, 0, 0);
   vkCmdEndRenderPass(cmd);
+}
+
+void PostProcessingPass::CreateDescriptorSetLayout() {
+  VkDescriptorSetLayoutBinding bindings[2] = {};
+  bindings[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT};
+  bindings[1] = {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT};
+
+  VkDescriptorSetLayoutCreateInfo dslci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  dslci.bindingCount = 2;
+  dslci.pBindings = bindings;
+  if (vkCreateDescriptorSetLayout(m_device, &dslci, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("Failed to create PostProcessInput layout");
+  }
+
+  g_DescriptorManager.RegisterLayout("PostProcessInput", m_descriptorSetLayout);
+}
+
+void PostProcessingPass::CreateRenderPass() {
+  VkAttachmentDescription att{};
+  att.samples = VK_SAMPLE_COUNT_1_BIT;
+  att.format = m_swapchainFormat;
+  att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  att.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+  VkAttachmentReference aref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  VkSubpassDescription sp{};
+  sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  sp.colorAttachmentCount = 1;
+  sp.pColorAttachments = &aref;
+
+  VkSubpassDependency dep{VK_SUBPASS_EXTERNAL,
+                          0,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          0,
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT};
+
+  VkRenderPassCreateInfo rpc{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+  rpc.attachmentCount = 1;
+  rpc.pAttachments = &att;
+  rpc.subpassCount = 1;
+  rpc.pSubpasses = &sp;
+  rpc.dependencyCount = 1;
+  rpc.pDependencies = &dep;
+  if (vkCreateRenderPass(m_device, &rpc, nullptr, &m_renderPass) != VK_SUCCESS) {
+    throw std::runtime_error("Failed to create PostProcess render pass");
+  }
+}
+
+void PostProcessingPass::CreatePipeline() {
+  // 1) Load SPIRâ€‘V shaders
+  auto vertCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingVS.spv");
+  auto fragCode = VkUtils::ReadFile("Resources/Shaders/PostProcessingPS.spv");
+  VkShaderModule vertShader = VkUtils::CreateShaderModule(m_device, vertCode);
+  VkShaderModule fragShader = VkUtils::CreateShaderModule(m_device, fragCode);
+
+  // 2) Pipeline shader stages
+  VkPipelineShaderStageCreateInfo stages[2]{};
+  stages[0] = {
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertShader, "main", nullptr};
+  stages[1] = {
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragShader, "main", nullptr};
+
+  // 3) No vertex buffers: fullâ€‘screen triangle in VS
+  VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+  vi.vertexBindingDescriptionCount = 0;
+  vi.pVertexBindingDescriptions = nullptr;
+  vi.vertexAttributeDescriptionCount = 0;
+  vi.pVertexAttributeDescriptions = nullptr;
+
+  // 4) Input assembly: triangle list
+  VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  ia.primitiveRestartEnable = VK_FALSE;
+
+  // 5) Viewport & scissor
+  VkViewport viewport{0.0f, 0.0f, float(m_extent.width), float(m_extent.height), 0.0f, 1.0f};
+  VkRect2D scissor{{0, 0}, m_extent};
+  VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+  vp.viewportCount = 1;
+  vp.pViewports = &viewport;
+  vp.scissorCount = 1;
+  vp.pScissors = &scissor;
+
+  // 6) Rasterizer
+  VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+  rs.depthClampEnable = VK_FALSE;
+  rs.rasterizerDiscardEnable = VK_FALSE;
+  rs.polygonMode = VK_POLYGON_MODE_FILL;
+  rs.lineWidth = 1.0f;
+  rs.cullMode = VK_CULL_MODE_NONE;
+  rs.frontFace = VK_FRONT_FACE_CLOCKWISE;
+  rs.depthBiasEnable = VK_FALSE;
+
+  // 7) Multisampling
+  VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  ms.sampleShadingEnable = VK_FALSE;
+
+  // 8) Color blending
+  VkPipelineColorBlendAttachmentState attach{0};
+  attach.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  attach.blendEnable = VK_FALSE;
+  VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+  cb.logicOpEnable = VK_FALSE;
+  cb.attachmentCount = 1;
+  cb.pAttachments = &attach;
+
+  // 9) Pipeline layout with push constant
+  VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PostFXPushConstant)};
+  VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  pli.setLayoutCount = 1;
+  pli.pSetLayouts = &m_descriptorSetLayout;
+  pli.pushConstantRangeCount = 1;
+  pli.pPushConstantRanges = &pcr;
+  if (vkCreatePipelineLayout(m_device, &pli, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+    throw std::runtime_error("Failed to create PostProcess pipeline layout");
+  }
+
+  // 10) Graphics pipeline
+  VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+  gpi.stageCount = 2;
+  gpi.pStages = stages;
+  gpi.pVertexInputState = &vi;
+  gpi.pInputAssemblyState = &ia;
+  gpi.pViewportState = &vp;
+  gpi.pRasterizationState = &rs;
+  gpi.pMultisampleState = &ms;
+  gpi.pColorBlendState = &cb;
+  gpi.layout = m_pipelineLayout;
+  gpi.renderPass = m_renderPass;
+  gpi.subpass = 0;
+  if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &gpi, nullptr, &m_pipeline) != VK_SUCCESS) {
+    throw std::runtime_error("Failed to create PostProcess pipeline");
+  }
+
+  // 11) Cleanup shader modules
+  vkDestroyShaderModule(m_device, vertShader, nullptr);
+  vkDestroyShaderModule(m_device, fragShader, nullptr);
+}
+
+void PostProcessingPass::CreateFramebuffers() {
+  m_framebuffers.resize(m_swapchainImageViews.size());
+  for (size_t i = 0; i < m_framebuffers.size(); ++i) {
+    VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    fci.renderPass = m_renderPass;
+    fci.attachmentCount = 1;
+    fci.pAttachments = &m_swapchainImageViews[i];
+    fci.width = m_extent.width;
+    fci.height = m_extent.height;
+    fci.layers = 1;
+    if (vkCreateFramebuffer(m_device, &fci, nullptr, &m_framebuffers[i]) != VK_SUCCESS) {
+      throw std::runtime_error("Failed to create PostProcess framebuffer");
+    }
+  }
+}
+
+void PostProcessingPass::CreateDescriptorSets() {
+  for (uint32_t i = 0; i < m_swapchainImageViews.size(); ++i) {
+    VkDescriptorImageInfo colorInfo{m_pLightingPass->GetColourSampler(), m_pLightingPass->GetColourImageView(i),
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo shadowInfo{m_pLightingPass->GetShadowSampler(), m_pLightingPass->GetShadowImageView(i),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+    auto builder = VkUtils::DescriptorBuilder::Begin(&g_DescriptorLayoutCache, &g_DescriptorAllocator);
+    builder.BindImage(0, &colorInfo, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+        .BindImage(1, &shadowInfo, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    g_DescriptorManager.AddDescriptorSet(&builder, "PostProcessInput" + std::to_string(i));
+  }
 }

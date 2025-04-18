@@ -34,8 +34,6 @@ class CullingRenderPass : public IRenderPass {
   void GetQueryResults();
 
   virtual void Draw(uint32_t imageIndex, VkFence fence, VkSemaphore renderAvailable);
-
-  VkImageView& GetFrameBufferImageView() { return m_depthOnlyBufferImage.imageView; };
   VkSemaphore& GetSemaphore(uint32_t imageIndex) { return m_renderAvailable[imageIndex]; };
 
  private:
