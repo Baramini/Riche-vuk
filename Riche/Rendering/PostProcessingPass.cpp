@@ -1,7 +1,4 @@
 ﻿#include "PostProcessingPass.h"
-
-#include <stdexcept>
-
 #include "BasicLightingPass.h"
 #include "VkUtils/DescriptorAllocator.h"
 #include "VkUtils/DescriptorBuilder.h"
@@ -44,24 +41,28 @@ void PostProcessingPass::Cleanup() {
 }
 
 void PostProcessingPass::RecordCommands(VkCommandBuffer cmd, uint32_t frameIndex) {
-  VkClearValue clearColor{{0.0f, 0.0f, 0.0f, 1.0f}};
-  VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-  rpbi.renderPass = m_renderPass;
-  rpbi.framebuffer = m_framebuffers[frameIndex];
-  rpbi.renderArea.extent = m_extent;
-  rpbi.clearValueCount = 1;
-  rpbi.pClearValues = &clearColor;
-  vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+  //VkClearValue clearColor{{0.0f, 0.0f, 0.0f, 1.0f}};
+  //VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+  //rpbi.renderPass = m_renderPass;
+  //rpbi.framebuffer = m_framebuffers[frameIndex];
+  //rpbi.renderArea.extent = m_extent;
+  //rpbi.clearValueCount = 1;
+  //rpbi.pClearValues = &clearColor;
+  //vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
   auto descSet = g_DescriptorManager.GetVkDescriptorSet("PostProcessInput" + std::to_string(frameIndex));
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &descSet, 0, nullptr);
 
-  PostFXPushConstant pc{/* isEnableBloom = */ 1};
+  PostFXPushConstant pc;
+  pc.isEnableBloom = 1;
+  pc.padding = 0.0f;  // 반드시 채워줄 것
+  pc.texelSize = glm::vec2(1.0f / m_extent.width, 1.0f / m_extent.height);
   vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 
   vkCmdDraw(cmd, 3, 1, 0, 0);
-  vkCmdEndRenderPass(cmd);
+
+  //vkCmdEndRenderPass(cmd);
 }
 
 void PostProcessingPass::CreateDescriptorSetLayout() {
@@ -80,7 +81,7 @@ void PostProcessingPass::CreateDescriptorSetLayout() {
 }
 
 void PostProcessingPass::CreateRenderPass() {
-  VkAttachmentDescription att{};
+  /*VkAttachmentDescription att{};
   att.samples = VK_SAMPLE_COUNT_1_BIT;
   att.format = m_swapchainFormat;
   att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -110,7 +111,104 @@ void PostProcessingPass::CreateRenderPass() {
   rpc.pDependencies = &dep;
   if (vkCreateRenderPass(m_device, &rpc, nullptr, &m_renderPass) != VK_SUCCESS) {
     throw std::runtime_error("Failed to create PostProcess render pass");
-  }
+  }*/
+
+  // Array of Subpasses
+  std::array<VkSubpassDescription, 1> subpasses{};
+
+  //
+  // ATTACHMENTS
+  //
+  // SwapChain Colour attacment of render pass
+  VkAttachmentDescription swapChainColourAttachment = {};
+  swapChainColourAttachment.format = m_swapchainFormat;  // format to use for attachment
+  swapChainColourAttachment.samples =
+      VK_SAMPLE_COUNT_1_BIT;  // number of samples to write for multisampling, relative to multisampling
+  swapChainColourAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;             // Describes what to do with attachment before rendering
+  swapChainColourAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;           // Describes what to do with attachment after rendering
+  swapChainColourAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  // Describes what to do with stencil before rendering
+  swapChainColourAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;  // Describes what to do with stencil after rendering
+
+  // FrameBuffer data will be stored as an image, but images can be given different data layouts
+  // to give optimal use for certain operations, initial -> subpass -> final
+  swapChainColourAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;      // Image data layout before render pass starts
+  swapChainColourAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;  // Image data layout after render pass (to change to)
+
+  VkAttachmentDescription depthStencilAttachment = {};
+  depthStencilAttachment.format = VkUtils::ChooseSupportedFormat(
+      m_physicalDevice, {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT},
+      VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+  depthStencilAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  depthStencilAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  depthStencilAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  depthStencilAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  depthStencilAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  depthStencilAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  depthStencilAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+  // REFERENCES
+  // FrameBuffer를 만들 때 사용하였던, attachment 배열을 참조한다고 보면 된다.
+  // Attachment reference uses an attachment index that refers to index in the attachment list passed to renderPassCreateInfo
+  VkAttachmentReference swapChainColourAttachmentRef = {};
+  swapChainColourAttachmentRef.attachment = 0;  // 얼마나 많은 attachment가 있는지 정의X, 몇번째 attachment를 참조하냐의 느낌.
+  swapChainColourAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+  VkAttachmentReference depthStencilAttachmentRef = {};
+  depthStencilAttachmentRef.attachment = 1;
+  depthStencilAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+  // NOTE: We don't need Input Reference, because we don't use more than two subpasses.
+  // Information about a particular subpass the render pass is using
+  subpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;  // Pipeline type subpass is to be bound to
+  subpasses[0].colorAttachmentCount = 1;
+  subpasses[0].pColorAttachments = &swapChainColourAttachmentRef;
+  subpasses[0].pDepthStencilAttachment = &depthStencilAttachmentRef;
+
+  //
+  // SUBPASS DEPENDENCY
+  //
+  // Need to determine when layout transitions occur using subpass dependencies
+  std::array<VkSubpassDependency, 2> subpassDependencies;
+
+  // Conversion from VK_IMAGE_LAYER-UNDEFINED to VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+  // Transition must happen after ..
+  subpassDependencies[0].srcSubpass =
+      VK_SUBPASS_EXTERNAL;  // 외부에서 들어오므로, Subpass index(VK_SUBPASS_EXTERNAL = Special value meaning outside of renderpass)
+  subpassDependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;  // Pipeline stage
+  subpassDependencies[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;            // Stage access mask (memory access)
+  // But most happen before ..
+  subpassDependencies[0].dstSubpass = 0;
+  subpassDependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  subpassDependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  subpassDependencies[0].dependencyFlags = 0;
+
+  // Conversion from VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL to VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+  // Transition must happen after ..
+  subpassDependencies[1].srcSubpass = 0;
+  subpassDependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;  // Pipeline stage
+  subpassDependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  // But most happen before ..
+  subpassDependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+  subpassDependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+  subpassDependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+  subpassDependencies[1].dependencyFlags = 0;
+
+  //
+  // RENDER PASS CREATE INFO
+  //
+  std::array<VkAttachmentDescription, 2> renderPassAttachments = {swapChainColourAttachment, depthStencilAttachment};
+
+  // Create info for Render Pass
+  VkRenderPassCreateInfo renderPassCreateInfo = {};
+  renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  renderPassCreateInfo.attachmentCount = static_cast<uint32_t>(renderPassAttachments.size());
+  renderPassCreateInfo.pAttachments = renderPassAttachments.data();
+  renderPassCreateInfo.subpassCount = static_cast<uint32_t>(subpasses.size());
+  renderPassCreateInfo.pSubpasses = subpasses.data();
+  renderPassCreateInfo.dependencyCount = static_cast<uint32_t>(subpassDependencies.size());
+  renderPassCreateInfo.pDependencies = subpassDependencies.data();
+
+  VK_CHECK(vkCreateRenderPass(m_device, &renderPassCreateInfo, nullptr, &m_renderPass));
 }
 
 void PostProcessingPass::CreatePipeline() {

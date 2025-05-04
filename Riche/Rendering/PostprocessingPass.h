@@ -47,4 +47,6 @@ class PostProcessingPass {
 
 struct PostFXPushConstant {
   int isEnableBloom;
+  float padding;
+  glm::vec2 texelSize;
 };

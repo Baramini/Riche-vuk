@@ -1104,12 +1104,14 @@ void VulkanRenderer::CreateSynchronisation() {
 
 void VulkanRenderer::RecordCommands(uint32_t currentImage) {
   FillOffScreenCommands(currentImage);
-  VkCommandBuffer cmd = m_swapchainCommandBuffers[currentImage];
-  VkCommandBufferBeginInfo bufferBeginInfo{};
-  bufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  bufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-  VK_CHECK(vkBeginCommandBuffer(cmd, &bufferBeginInfo));
-  m_pPostProcessingRenderPass->RecordCommands(cmd, currentImage);
+
+  //VkCommandBuffer cmd = m_swapchainCommandBuffers[currentImage];
+  //VkCommandBufferBeginInfo bufferBeginInfo{};
+  //bufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  //bufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+  //VK_CHECK(vkBeginCommandBuffer(cmd, &bufferBeginInfo));
+  //m_pPostProcessingRenderPass->RecordCommands(cmd, currentImage);
+
 }
 
 void VulkanRenderer::FillOffScreenCommands(uint32_t currentImage) {
@@ -1144,17 +1146,17 @@ void VulkanRenderer::FillOffScreenCommands(uint32_t currentImage) {
   vkCmdBeginRenderPass(m_swapchainCommandBuffers[currentImage], &renderPassBeginInfo,
                        VK_SUBPASS_CONTENTS_INLINE);  // 렌더 패스의 내용을 직접 명령 버퍼에 기록하는 것을 의미
 
-  vkCmdBindPipeline(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipeline);
+  //vkCmdBindPipeline(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipeline);
 
-  vkCmdBindDescriptorSets(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipelineLayout, 0, 1,
-                          &g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"), 0, nullptr);
-  vkCmdBindDescriptorSets(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipelineLayout, 1, 1,
-                          &g_DescriptorManager.GetVkDescriptorSet("OffScreenInput" + std::to_string(currentImage)), 0, nullptr);
-  vkCmdBindDescriptorSets(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipelineLayout, 2, 1,
-                          &g_DescriptorManager.GetVkDescriptorSet("ShadowTexture_ALL" + std::to_string(currentImage)), 0, nullptr);
+  //vkCmdBindDescriptorSets(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipelineLayout, 0, 1,
+  //                        &g_DescriptorManager.GetVkDescriptorSet("SamplerList_ALL"), 0, nullptr);
+  //vkCmdBindDescriptorSets(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipelineLayout, 1, 1,
+  //                        &g_DescriptorManager.GetVkDescriptorSet("OffScreenInput" + std::to_string(currentImage)), 0, nullptr);
+  //vkCmdBindDescriptorSets(m_swapchainCommandBuffers[currentImage], VK_PIPELINE_BIND_POINT_GRAPHICS, m_offScreenPipelineLayout, 2, 1,
+  //                        &g_DescriptorManager.GetVkDescriptorSet("ShadowTexture_ALL" + std::to_string(currentImage)), 0, nullptr);
 
-  vkCmdDraw(m_swapchainCommandBuffers[currentImage], 3, 1, 0, 0);
-
+  //vkCmdDraw(m_swapchainCommandBuffers[currentImage], 3, 1, 0, 0);
+  m_pPostProcessingRenderPass->RecordCommands(m_swapchainCommandBuffers[currentImage], currentImage);
   m_pEditor->RenderImGui(m_swapchainCommandBuffers[currentImage], currentImage);
 
   // End Render Pass
