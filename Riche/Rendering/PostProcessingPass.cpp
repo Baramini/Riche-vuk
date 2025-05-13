@@ -55,7 +55,7 @@ void PostProcessingPass::RecordCommands(VkCommandBuffer cmd, uint32_t frameIndex
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &descSet, 0, nullptr);
 
   PostFXPushConstant pc;
-  pc.isEnableBloom = 1;
+  pc.isEnableBloom = g_RenderSetting.isEnableBloom;
   pc.padding = 0.0f;  // 반드시 채워줄 것
   pc.texelSize = glm::vec2(1.0f / m_extent.width, 1.0f / m_extent.height);
   vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);

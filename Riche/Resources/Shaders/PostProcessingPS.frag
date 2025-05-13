@@ -23,23 +23,24 @@ void main() {
     vec3 baseColor     = texture(inputColour, inFragTexcoord).rgb;
     float shadowFactor = texture(u_ShadowTexture, inFragTexcoord).r;
 
-    // 1. Bloom Extract
+    // 1. Bloom Extract (only if enabled)
     vec3 bloom = vec3(0.0);
-    float kernel[3] = float[](0.25, 0.5, 0.25);
-
-    for (int y = -3; y <= 3; ++y) {
-        for (int x = -3; x <= 3; ++x) {
-            vec2 offset = vec2(x, y) * pc.texelSize;
-            vec3 bloomSample = texture(inputColour, inFragTexcoord + offset).rgb;
-            float b = brightness(bloomSample);
-            if (b > 1.0) {
-                int ax = abs(x);
-                int ay = abs(y);
-                bloom += bloomSample * kernel[ax] * kernel[ay];
+    if (pc.isEnableBloom != 0) {
+        float kernel[3] = float[](0.25, 0.5, 0.25);
+        for (int y = -3; y <= 3; ++y) {
+            for (int x = -3; x <= 3; ++x) {
+                vec2 offset = vec2(x, y) * pc.texelSize;
+                vec3 bloomSample = texture(inputColour, inFragTexcoord + offset).rgb;
+                float b = brightness(bloomSample);
+                if (b > 1.0) {
+                    int ax = abs(x);
+                    int ay = abs(y);
+                    bloom += bloomSample * kernel[ax] * kernel[ay];
+                }
             }
         }
+        bloom /= 36.0;
     }
-    bloom /= 36.0;
 
     // 2. Shadow
     vec3 shadowed = baseColor * shadowFactor;
@@ -47,7 +48,7 @@ void main() {
     // 3. ToneMapping
     vec3 toneMapped = Tonemap_Reinhard(shadowed);
 
-    // 4. Bloom
+    // 4. Apply Bloom if enabled
     vec3 result = toneMapped + bloom;
 
     outColour = vec4(result, 1.0);
