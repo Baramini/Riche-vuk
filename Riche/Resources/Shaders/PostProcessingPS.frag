@@ -26,20 +26,18 @@ void main() {
     // 1. Bloom Extract (only if enabled)
     vec3 bloom = vec3(0.0);
     if (pc.isEnableBloom != 0) {
-        float kernel[3] = float[](0.25, 0.5, 0.25);
-        for (int y = -3; y <= 3; ++y) {
-            for (int x = -3; x <= 3; ++x) {
+        for (int y = -2; y <= 2; ++y) {
+            for (int x = -2; x <= 2; ++x) {
                 vec2 offset = vec2(x, y) * pc.texelSize;
                 vec3 bloomSample = texture(inputColour, inFragTexcoord + offset).rgb;
                 float b = brightness(bloomSample);
-                if (b > 1.0) {
-                    int ax = abs(x);
-                    int ay = abs(y);
-                    bloom += bloomSample * kernel[ax] * kernel[ay];
+                if (b > 0.99) {
+                    bloom += bloomSample;
                 }
             }
         }
-        bloom /= 36.0;
+        bloom /= 25.0;
+        bloom *= 1.0; //
     }
 
     // 2. Shadow
@@ -48,8 +46,9 @@ void main() {
     // 3. ToneMapping
     vec3 toneMapped = Tonemap_Reinhard(shadowed);
 
-    // 4. Apply Bloom if enabled
+    // 4. Add Bloom
     vec3 result = toneMapped + bloom;
 
     outColour = vec4(result, 1.0);
 }
+
