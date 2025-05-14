@@ -23,21 +23,24 @@ void main() {
     vec3 baseColor     = texture(inputColour, inFragTexcoord).rgb;
     float shadowFactor = texture(u_ShadowTexture, inFragTexcoord).r;
 
-    // 1. Bloom Extract (only if enabled)
+    // 1. Bloom Extract with shadow filter
     vec3 bloom = vec3(0.0);
     if (pc.isEnableBloom != 0) {
-        for (int y = -2; y <= 2; ++y) {
-            for (int x = -2; x <= 2; ++x) {
+        for (int y = -3; y <= 3; ++y) {
+            for (int x = -3; x <= 3; ++x) {
                 vec2 offset = vec2(x, y) * pc.texelSize;
+
                 vec3 bloomSample = texture(inputColour, inFragTexcoord + offset).rgb;
                 float b = brightness(bloomSample);
-                if (b > 0.99) {
+                float visibility = texture(u_ShadowTexture, inFragTexcoord + offset).r;
+
+                if (b > 0.9999 && visibility > 0.9) { // Shadow condition plus
                     bloom += bloomSample;
                 }
             }
         }
-        bloom /= 25.0;
-        bloom *= 1.0; //
+        bloom /= 49.0;
+        bloom *= 0.2;
     }
 
     // 2. Shadow
@@ -49,6 +52,6 @@ void main() {
     // 4. Add Bloom
     vec3 result = toneMapped + bloom;
 
-    outColour = vec4(result, 1.0);
+    outColour = vec4(clamp(result, 0.0, 1.0), 1.0);
 }
 
